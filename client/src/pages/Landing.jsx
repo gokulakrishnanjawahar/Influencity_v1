@@ -42,11 +42,11 @@ const WARNING = "#fb923c";
 // ─────────────────────────────────────────────
 function LogoIntro({ onComplete }) {
   const [phase, setPhase] = useState(0);
-  // 0: centered large, 1: hex animates, 2: slides to navbar
+  // 0: fade in, 1: hex animates, 2: fade out
 
   useEffect(() => {
-    const t1 = setTimeout(() => setPhase(1), 600);
-    const t2 = setTimeout(() => setPhase(2), 1800);
+    const t1 = setTimeout(() => setPhase(1), 400);
+    const t2 = setTimeout(() => setPhase(2), 2000);
     const t3 = setTimeout(() => onComplete(), 2600);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, []);
@@ -64,34 +64,11 @@ function LogoIntro({ onComplete }) {
         pointerEvents: "none",
       }}
       animate={{ opacity: phase === 2 ? 0 : 1 }}
-      transition={{ duration: 0.5, delay: phase === 2 ? 0.4 : 0 }}
+      transition={{ duration: 0.5 }}
     >
-      <motion.div
-        style={{ display: "flex", alignItems: "center", gap: 16 }}
-        animate={
-          phase === 2
-            ? {
-                position: "fixed",
-                top: 16,
-                left: 24,
-                scale: 0.52,
-                x: 0,
-                y: 0,
-              }
-            : {}
-        }
-        transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-      >
-        {/* Hex mark — animates vertices */}
-        <motion.svg
-          width={phase === 2 ? 28 : 72}
-          height={phase === 2 ? 28 : 72}
-          viewBox="0 0 36 36"
-          fill="none"
-          animate={{ width: phase === 2 ? 28 : 72, height: phase === 2 ? 28 : 72 }}
-          transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-        >
-          {/* Outer hex — draws in */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 20 }}>
+        {/* Hex mark — animates vertices one by one */}
+        <svg width="72" height="72" viewBox="0 0 36 36" fill="none">
           <motion.polygon
             points="18,3 31,10.5 31,25.5 18,33 5,25.5 5,10.5"
             stroke="white"
@@ -99,9 +76,8 @@ function LogoIntro({ onComplete }) {
             fill="none"
             initial={{ pathLength: 0, opacity: 0 }}
             animate={{ pathLength: phase >= 1 ? 1 : 0, opacity: 1 }}
-            transition={{ duration: 0.8, ease: "easeInOut" }}
+            transition={{ duration: 1.0, ease: "easeInOut" }}
           />
-          {/* Inner hex — fades in */}
           <motion.polygon
             points="18,10 25,14.5 25,21.5 18,26 11,21.5 11,14.5"
             fill="white"
@@ -109,20 +85,18 @@ function LogoIntro({ onComplete }) {
             strokeWidth="0.75"
             initial={{ opacity: 0 }}
             animate={{ opacity: phase >= 1 ? 0.08 : 0 }}
-            transition={{ delay: 0.4 }}
+            transition={{ delay: 0.5 }}
           />
-          {/* Center dot — pops in */}
           <motion.circle
             cx="18" cy="18" r="3.5"
             fill="white"
             initial={{ scale: 0, opacity: 0 }}
             animate={{ scale: phase >= 1 ? 1 : 0, opacity: 1 }}
-            transition={{ delay: 0.5, type: "spring", stiffness: 300 }}
+            transition={{ delay: 0.6, type: "spring", stiffness: 300 }}
           />
-          {/* Vertex dots — stagger in */}
           {[
             { x: 18, y: 3 }, { x: 31, y: 10.5 }, { x: 31, y: 25.5 },
-            { x: 18, y: 33 }, { x: 5, y: 25.5 }, { x: 5, y: 10.5 }
+            { x: 18, y: 33 }, { x: 5, y: 25.5 }, { x: 5, y: 10.5 },
           ].map(({ x, y }, i) => (
             <motion.circle
               key={i}
@@ -133,27 +107,18 @@ function LogoIntro({ onComplete }) {
               transition={{ delay: 0.3 + i * 0.08, type: "spring", stiffness: 400 }}
             />
           ))}
-        </motion.svg>
+        </svg>
 
-        {/* Wordmark */}
+        {/* Wordmark fades in after hex */}
         <motion.span
-          style={{
-            fontWeight: 900,
-            color: WHITE,
-            letterSpacing: -2,
-            lineHeight: 1,
-          }}
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ 
-            opacity: phase >= 1 ? 1 : 0, 
-            x: 0, 
-            fontSize: phase === 2 ? "16px" : "42px" 
-          }}
-          transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: phase >= 1 ? 1 : 0, y: phase >= 1 ? 0 : 8 }}
+          transition={{ delay: 0.5, duration: 0.5 }}
+          style={{ fontSize: 28, fontWeight: 900, color: WHITE, letterSpacing: -1 }}
         >
           Influencity
         </motion.span>
-      </motion.div>
+      </div>
     </motion.div>
   );
 }
