@@ -1,0 +1,20 @@
+{
+  "name": "influencity-server",
+  "version": "1.0.0",
+  "description": "Influencity Backend API",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.4",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "ethers": "^6.16.0",
+    "express": "^5.2.1",
+    "pinata": "^2.5.6",
+    "nodemon": "^3.0.0"
+  }
+}
