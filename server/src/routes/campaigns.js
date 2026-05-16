@@ -1,12 +1,6 @@
 // ─────────────────────────────────────────────
 // Campaign Routes
 // ─────────────────────────────────────────────
-// POST /campaigns        — Brand creates a campaign (uploads brief to IPFS,
-//                          returns brief CID + escrow deployment params)
-// GET  /campaigns/:id    — Returns campaign metadata + milestone status
-// GET  /campaigns        — Returns all campaigns for a wallet address
-// POST /campaigns/:id/proof — Creator submits content proof to IPFS
-// ─────────────────────────────────────────────
 
 import express from "express";
 import { ethers } from "ethers";
@@ -15,16 +9,27 @@ import {
   uploadContentProof,
   buildGatewayUrl,
 } from "../services/ipfs.js";
+import {
+  createCampaign,
+  getCampaignByOnchainId,
+  getCampaignByContract,
+  getCampaignsForWallet,
+  createMilestones,
+  updateMilestoneProof,
+  createContentProof,
+  getOrCreateUser,
+} from "../services/supabase.js";
+import { requireAuth, optionalAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
 // ─────────────────────────────────────────────
 // POST /campaigns
-// Brand creates a campaign — uploads brief to IPFS
-// Returns the IPFS CID to be passed to the smart contract
+// Brand uploads brief to IPFS — returns CID + contract params
+// Frontend then deploys the contract and calls POST /campaigns/confirm
 // ─────────────────────────────────────────────
 
-router.post("/", async (req, res, next) => {
+router.post("/", requireAuth, async (req, res, next) => {
   try {
     const {
       brandAddress,
@@ -32,34 +37,35 @@ router.post("/", async (req, res, next) => {
       title,
       description,
       milestones,
-      walletSignature,
     } = req.body;
 
-    // ── Validation ──
-    if (!brandAddress || !ethers.isAddress(brandAddress)) {
-      return res.status(400).json({ error: "Invalid brand wallet address" });
+    // Verify the authenticated wallet is the brand
+    if (req.walletAddress !== brandAddress?.toLowerCase()) {
+      return res.status(403).json({ error: "Authenticated wallet must match brandAddress" });
     }
+
+    // Validate inputs
     if (!creatorAddress || !ethers.isAddress(creatorAddress)) {
       return res.status(400).json({ error: "Invalid creator wallet address" });
     }
-    if (!title || title.trim().length === 0) {
+    if (!title?.trim()) {
       return res.status(400).json({ error: "Campaign title is required" });
     }
     if (!milestones || !Array.isArray(milestones) || milestones.length === 0) {
       return res.status(400).json({ error: "At least one milestone is required" });
     }
 
-    // ── Validate each milestone ──
     for (let i = 0; i < milestones.length; i++) {
       const m = milestones[i];
-      if (!m.platform || !m.metricType || !m.threshold || !m.trancheAmount || !m.deadline || !m.contentId) {
+      if (!m.platform || !m.metricType || !m.threshold ||
+          !m.trancheAmount || !m.deadline || !m.contentId) {
         return res.status(400).json({
           error: `Milestone ${i} is missing required fields`,
         });
       }
     }
 
-    // ── Build campaign brief object ──
+    // Build and upload campaign brief to IPFS
     const campaignId = `camp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     const brief = {
@@ -80,17 +86,14 @@ router.post("/", async (req, res, next) => {
       createdAt: new Date().toISOString(),
     };
 
-    // ── Upload brief to IPFS via Pinata ──
     const { cid, url } = await uploadCampaignBrief(brief);
 
-    // ── Return CID and contract deployment params ──
-    // Frontend uses these to call CampaignFactory.createCampaign()
+    // Return CID + contract deployment params to frontend
     res.status(201).json({
       success: true,
       campaignId,
       ipfsBriefCid: cid,
       ipfsBriefUrl: url,
-      // Contract deployment params — ready to pass directly to ethers.js
       contractParams: {
         creatorAddress,
         ipfsBriefHash: cid,
@@ -108,12 +111,124 @@ router.post("/", async (req, res, next) => {
 });
 
 // ─────────────────────────────────────────────
-// POST /campaigns/:id/proof
-// Creator submits content proof — uploads to IPFS
-// Returns proof CID to be submitted to the smart contract
+// POST /campaigns/confirm
+// Called AFTER the frontend successfully deploys the contract.
+// Saves the campaign + milestones to Supabase with the contract address.
 // ─────────────────────────────────────────────
 
-router.post("/:id/proof", async (req, res, next) => {
+router.post("/confirm", requireAuth, async (req, res, next) => {
+  try {
+    const {
+      campaignIdOnchain,
+      brandAddress,
+      creatorAddress,
+      contractAddress,
+      ipfsBriefCid,
+      ipfsBriefUrl,
+      title,
+      description,
+      totalDepositUsdc,
+      milestones,
+    } = req.body;
+
+    if (req.walletAddress !== brandAddress?.toLowerCase()) {
+      return res.status(403).json({ error: "Authenticated wallet must match brandAddress" });
+    }
+
+    // Ensure both users exist in DB
+    await getOrCreateUser(brandAddress, "brand");
+    await getOrCreateUser(creatorAddress, "creator");
+
+    // Save campaign to Supabase
+    const campaign = await createCampaign({
+      campaignIdOnchain,
+      brandAddress,
+      creatorAddress,
+      contractAddress,
+      ipfsBriefCid,
+      ipfsBriefUrl,
+      title,
+      description,
+      totalDepositUsdc,
+    });
+
+    // Save milestones to Supabase
+    if (milestones && milestones.length > 0) {
+      await createMilestones(campaign.id, milestones);
+    }
+
+    res.status(201).json({
+      success: true,
+      campaign,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────
+// GET /campaigns
+// Returns all campaigns for a wallet address
+// ─────────────────────────────────────────────
+
+router.get("/", optionalAuth, async (req, res, next) => {
+  try {
+    const { wallet } = req.query;
+    const address = wallet || req.walletAddress;
+
+    if (!address || !ethers.isAddress(address)) {
+      return res.status(400).json({ error: "wallet query param required" });
+    }
+
+    const campaigns = await getCampaignsForWallet(address);
+
+    res.json({
+      success: true,
+      campaigns,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────
+// GET /campaigns/:id
+// Returns campaign metadata + milestone status
+// id can be on-chain campaign ID or contract address
+// ─────────────────────────────────────────────
+
+router.get("/:id", optionalAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    let campaign;
+
+    // Check if id is a contract address (0x...) or on-chain ID (number)
+    if (ethers.isAddress(id)) {
+      campaign = await getCampaignByContract(id);
+    } else {
+      campaign = await getCampaignByOnchainId(parseInt(id));
+    }
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    res.json({
+      success: true,
+      campaign,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────
+// POST /campaigns/:id/proof
+// Creator submits content proof — uploads to IPFS + saves to Supabase
+// ─────────────────────────────────────────────
+
+router.post("/:id/proof", requireAuth, async (req, res, next) => {
   try {
     const { id: campaignId } = req.params;
     const {
@@ -124,26 +239,35 @@ router.post("/:id/proof", async (req, res, next) => {
       contentId,
     } = req.body;
 
-    // ── Validation ──
-    if (!creatorAddress || !ethers.isAddress(creatorAddress)) {
-      return res.status(400).json({ error: "Invalid creator wallet address" });
-    }
-    if (milestoneIndex === undefined || milestoneIndex === null) {
-      return res.status(400).json({ error: "Milestone index is required" });
-    }
-    if (!platform) {
-      return res.status(400).json({ error: "Platform is required" });
-    }
-    if (!contentUrl) {
-      return res.status(400).json({ error: "Content URL is required" });
-    }
-    if (!contentId) {
-      return res.status(400).json({ error: "Content ID is required" });
+    // Verify authenticated wallet is the creator
+    if (req.walletAddress !== creatorAddress?.toLowerCase()) {
+      return res.status(403).json({ error: "Authenticated wallet must match creatorAddress" });
     }
 
-    // ── Build proof object ──
+    if (!platform || !contentUrl || !contentId) {
+      return res.status(400).json({ error: "platform, contentUrl and contentId are required" });
+    }
+
+    // Get campaign from DB
+    let campaign;
+    if (ethers.isAddress(campaignId)) {
+      campaign = await getCampaignByContract(campaignId);
+    } else {
+      campaign = await getCampaignByOnchainId(parseInt(campaignId));
+    }
+
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    // Verify this creator belongs to this campaign
+    if (campaign.creator_address !== creatorAddress.toLowerCase()) {
+      return res.status(403).json({ error: "Not the creator of this campaign" });
+    }
+
+    // Build and upload proof to IPFS
     const proof = {
-      campaignId,
+      campaignId: campaign.id,
       creatorAddress: creatorAddress.toLowerCase(),
       milestoneIndex,
       platform,
@@ -152,16 +276,28 @@ router.post("/:id/proof", async (req, res, next) => {
       submittedAt: new Date().toISOString(),
     };
 
-    // ── Upload proof to IPFS via Pinata ──
     const { cid, url } = await uploadContentProof(proof);
 
-    // ── Return CID ──
-    // Frontend uses this to call CampaignEscrow.submitProof(milestoneIndex, cid)
+    // Save proof to Supabase
+    await createContentProof({
+      campaignId: campaign.id,
+      creatorAddress,
+      milestoneIndex,
+      ipfsCid: cid,
+      ipfsUrl: url,
+      platformUrl: contentUrl,
+      contentId,
+      platform,
+    });
+
+    // Update milestone proof CID in Supabase
+    await updateMilestoneProof(campaign.id, milestoneIndex, cid);
+
     res.status(201).json({
       success: true,
       ipfsProofCid: cid,
       ipfsProofUrl: url,
-      // Ready to pass to escrow.submitProof()
+      // Frontend uses these to call escrow.submitProof()
       contractParams: {
         milestoneIndex,
         ipfsProofHash: cid,
@@ -173,38 +309,8 @@ router.post("/:id/proof", async (req, res, next) => {
 });
 
 // ─────────────────────────────────────────────
-// GET /campaigns/:id
-// Returns campaign metadata from IPFS CID
+// Helpers
 // ─────────────────────────────────────────────
-
-router.get("/:id", async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { ipfsCid } = req.query;
-
-    if (!ipfsCid) {
-      return res.status(400).json({ error: "ipfsCid query param required" });
-    }
-
-    const { getFromIPFS } = await import("../services/ipfs.js");
-    const brief = await getFromIPFS(ipfsCid);
-
-    res.json({
-      success: true,
-      campaignId: id,
-      brief,
-      ipfsUrl: buildGatewayUrl(ipfsCid),
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ─────────────────────────────────────────────
-// Helpers — Enum Converters
-// ─────────────────────────────────────────────
-// Convert string values from frontend to
-// uint8 enum values expected by the smart contract
 
 function platformToEnum(platform) {
   const map = { YOUTUBE: 0, TWITCH: 1, LINKEDIN: 2 };
