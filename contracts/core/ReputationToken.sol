@@ -26,6 +26,10 @@ contract ReputationToken is ERC1155, Ownable, IReputationToken {
     /// Only escrows deployed by CampaignFactory are added here
     mapping(address => bool) public authorisedMinters;
 
+    /// @notice Address of the CampaignFactory — allowed to authorise escrow minters
+    /// alongside the owner, so newly deployed escrows can mint automatically
+    address public campaignFactory;
+
     /// @notice Tracks total tokens minted per creator wallet
     mapping(address => uint256) public reputationScore;
 
@@ -58,6 +62,7 @@ contract ReputationToken is ERC1155, Ownable, IReputationToken {
 
     event MinterAuthorised(address indexed escrowAddress);
     event MinterRevoked(address indexed escrowAddress);
+    event CampaignFactorySet(address indexed factory);
 
     // ─────────────────────────────────────────────
     // Constructor
@@ -76,6 +81,15 @@ contract ReputationToken is ERC1155, Ownable, IReputationToken {
         require(
             authorisedMinters[msg.sender],
             "ReputationToken: caller is not an authorised minter"
+        );
+        _;
+    }
+
+    /// @notice Only the contract owner or the registered CampaignFactory
+    modifier onlyOwnerOrFactory() {
+        require(
+            msg.sender == owner() || msg.sender == campaignFactory,
+            "ReputationToken: caller is not owner or factory"
         );
         _;
     }
@@ -156,10 +170,22 @@ contract ReputationToken is ERC1155, Ownable, IReputationToken {
     /// @notice Authorises a CampaignEscrow contract to mint tokens.
     /// Called by CampaignFactory after deploying a new escrow.
     /// @param escrowAddress Address of the CampaignEscrow contract
-    function authoriseMinter(address escrowAddress) external onlyOwner {
+    function authoriseMinter(address escrowAddress)
+        external
+        override
+        onlyOwnerOrFactory
+    {
         require(escrowAddress != address(0), "ReputationToken: invalid address");
         authorisedMinters[escrowAddress] = true;
         emit MinterAuthorised(escrowAddress);
+    }
+
+    /// @notice Sets the CampaignFactory address allowed to authorise escrow minters.
+    /// Called once after deployment so the factory can auto-authorise each escrow.
+    function setCampaignFactory(address _factory) external onlyOwner {
+        require(_factory != address(0), "ReputationToken: invalid factory address");
+        campaignFactory = _factory;
+        emit CampaignFactorySet(_factory);
     }
 
     /// @notice Revokes minting rights from an escrow (e.g. if campaign is cancelled)

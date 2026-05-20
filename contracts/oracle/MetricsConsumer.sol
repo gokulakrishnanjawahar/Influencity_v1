@@ -53,6 +53,10 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
     /// @notice Address of the CampaignFactory — only contract allowed to authorise escrows
     address public campaignFactory;
 
+    /// @notice Address of the AutomationHandler — allowed to request metric checks
+    /// alongside authorised escrows
+    address public automationHandler;
+
     // ─────────────────────────────────────────────
     // Events
     // ─────────────────────────────────────────────
@@ -80,6 +84,7 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
     event SourceCodeUpdated(uint8 platform);
     event EscrowAuthorised(address indexed escrowAddress);
     event CampaignFactorySet(address indexed factory);
+    event AutomationHandlerSet(address indexed handler);
 
     // ─────────────────────────────────────────────
     // Modifiers
@@ -89,6 +94,15 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
         require(
             authorisedEscrows[msg.sender],
             "MetricsConsumer: caller is not an authorised escrow"
+        );
+        _;
+    }
+
+    /// @notice Allows authorised escrows OR the AutomationHandler to request metrics
+    modifier onlyAuthorisedCaller() {
+        require(
+            authorisedEscrows[msg.sender] || msg.sender == automationHandler,
+            "MetricsConsumer: caller not an authorised escrow or automation handler"
         );
         _;
     }
@@ -133,7 +147,7 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
         uint256 milestoneIndex,
         uint8 platform,
         string memory contentId
-    ) external onlyAuthorisedEscrow returns (bytes32 requestId) {
+    ) external onlyAuthorisedCaller returns (bytes32 requestId) {
         require(platform <= 2, "MetricsConsumer: invalid platform");
         require(bytes(contentId).length > 0, "MetricsConsumer: contentId required");
 
@@ -245,6 +259,13 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
         require(_factory != address(0), "MetricsConsumer: invalid factory address");
         campaignFactory = _factory;
         emit CampaignFactorySet(_factory);
+    }
+
+    /// @notice Sets the AutomationHandler address allowed to request metric checks
+    function setAutomationHandler(address _handler) external onlyOwner {
+        require(_handler != address(0), "MetricsConsumer: invalid handler address");
+        automationHandler = _handler;
+        emit AutomationHandlerSet(_handler);
     }
 
     // ─────────────────────────────────────────────

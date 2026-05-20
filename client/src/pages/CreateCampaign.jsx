@@ -8,7 +8,7 @@ import {
   Lock, Globe, Coins, Activity,
 } from "lucide-react";
 import PageLayout from "@/components/layout/PageLayout";
-import WalletGuard from "@/components/wallet/WalletGuard";
+import RoleGuard from "@/components/wallet/RoleGuard";
 import PlatformIcon from "@/components/shared/PlatformIcon";
 import { useCreateCampaign } from "@/hooks/useCampaign";
 import { useIPFS } from "@/hooks/useIPFS";
@@ -29,6 +29,7 @@ const MUTED = "#888888";
 const VERY_MUTED = "#444444";
 const SUCCESS = "#4ade80";
 const DANGER = "#f87171";
+const WARNING = "#fb923c";
 
 // ─────────────────────────────────────────────
 // STEP CONFIG
@@ -48,7 +49,6 @@ const DEFAULT_MILESTONE = {
   threshold: "",
   trancheAmount: "",
   deadline: "",
-  contentId: "",
 };
 
 // ─────────────────────────────────────────────
@@ -189,22 +189,10 @@ function Step1({ data, onChange, errors }) {
         />
       </Field>
 
-      <Field
-        label="Creator wallet address"
-        hint="The Ethereum wallet address of the creator you're partnering with"
-        error={errors.creatorAddress}
-      >
-        <Input
-          value={data.creatorAddress}
-          onChange={(v) => onChange("creatorAddress", v)}
-          placeholder="0x..."
-        />
-      </Field>
-
       <div style={{ padding: "14px 16px", borderRadius: 10, background: `rgba(74,222,128,0.04)`, border: `1px solid rgba(74,222,128,0.12)`, display: "flex", gap: 10 }}>
         <Lock size={14} style={{ color: MUTED, flexShrink: 0, marginTop: 1 }} />
         <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.6 }}>
-          Campaign details are uploaded to IPFS and the CID is locked immutably into the smart contract. The agreed terms cannot be altered after deployment.
+          Your campaign is posted as a public listing — creators apply and you pick one to form the agreement. Details are pinned to IPFS and locked immutably into the escrow contract.
         </p>
       </div>
     </motion.div>
@@ -292,13 +280,6 @@ function MilestoneRow({ milestone, index, onChange, onRemove, canRemove }) {
             value={milestone.deadline}
             onChange={(v) => onChange(index, "deadline", v)}
             type="date"
-          />
-        </Field>
-        <Field label="Content ID" hint="YouTube video ID, Twitch clip slug, etc.">
-          <Input
-            value={milestone.contentId}
-            onChange={(v) => onChange(index, "contentId", v)}
-            placeholder="dQw4w9WgXcQ"
           />
         </Field>
       </div>
@@ -400,7 +381,6 @@ function Step3({ details, milestones }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {[
             { label: "Title", value: details.title },
-            { label: "Creator", value: details.creatorAddress },
             { label: "Description", value: details.description || "—" },
           ].map(({ label, value }) => (
             <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
@@ -425,7 +405,6 @@ function Step3({ details, milestones }) {
                   <p style={{ fontSize: 12, fontWeight: 600, color: TEXT }}>
                     {Number(m.threshold).toLocaleString()} {m.metricType.replace("_", " ")}
                   </p>
-                  <p style={{ fontSize: 10, color: VERY_MUTED }}>{m.contentId}</p>
                 </div>
               </div>
               <p style={{ fontSize: 13, fontWeight: 700, color: TEXT, fontFamily: "monospace" }}>
@@ -455,14 +434,15 @@ function Step3({ details, milestones }) {
 // ─────────────────────────────────────────────
 // STEP 4 — Deploy
 // ─────────────────────────────────────────────
-function Step4({ status, txHash, campaignId, onDone }) {
+function Step4({ status, txHash, onDone }) {
   const navigate = useNavigate();
 
   const steps = [
     { label: "Uploading brief to IPFS", done: status >= 1 },
-    { label: "Awaiting wallet signature", done: status >= 2 },
-    { label: "Deploying CampaignEscrow contract", done: status >= 3 },
-    { label: "Confirming transaction on Base", done: status >= 4 },
+    { label: "Deploying campaign escrow", done: status >= 2 },
+    { label: "Approving USDC spend", done: status >= 3 },
+    { label: "Locking USDC in escrow", done: status >= 4 },
+    { label: "Publishing campaign listing", done: status >= 5 },
   ];
 
   return (
@@ -475,10 +455,12 @@ function Step4({ status, txHash, campaignId, onDone }) {
     >
       <div style={{ marginBottom: 32 }}>
         <h2 style={{ fontSize: 22, fontWeight: 900, color: TEXT, letterSpacing: -0.5, marginBottom: 6 }}>
-          {status < 4 ? "Deploying campaign..." : "Campaign deployed!"}
+          {status < 5 ? "Publishing campaign..." : "Campaign published!"}
         </h2>
         <p style={{ fontSize: 13, color: MUTED }}>
-          {status < 4 ? "Please confirm transactions in your wallet." : "Your campaign is live on Base."}
+          {status < 5
+            ? "Please confirm each transaction in your wallet."
+            : "Your campaign is now an open listing creators can apply to."}
         </p>
       </div>
 
@@ -515,7 +497,7 @@ function Step4({ status, txHash, campaignId, onDone }) {
         ))}
       </div>
 
-      {status >= 4 && (
+      {status >= 5 && (
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -555,7 +537,6 @@ export default function CreateCampaign() {
   const [details, setDetails] = useState({
     title: "",
     description: "",
-    creatorAddress: "",
   });
 
   const [milestones, setMilestones] = useState([{ ...DEFAULT_MILESTONE }]);
@@ -590,20 +571,13 @@ export default function CreateCampaign() {
   const validateStep1 = () => {
     const errs = {};
     if (!details.title.trim()) errs.title = "Title is required";
-    if (!details.creatorAddress.trim()) errs.creatorAddress = "Creator address is required";
-    if (details.creatorAddress && !details.creatorAddress.startsWith("0x")) {
-      errs.creatorAddress = "Must be a valid Ethereum address";
-    }
-    if (details.creatorAddress.toLowerCase() === address?.toLowerCase()) {
-      errs.creatorAddress = "Brand and creator cannot be the same wallet";
-    }
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
 
   const validateStep2 = () => {
     for (const m of milestones) {
-      if (!m.threshold || !m.trancheAmount || !m.deadline || !m.contentId) {
+      if (!m.threshold || !m.trancheAmount || !m.deadline) {
         toast.error("All milestone fields are required");
         return false;
       }
@@ -629,14 +603,10 @@ export default function CreateCampaign() {
 
   const handleDeploy = async () => {
     setStep(4);
+    setDeployStatus(0);
     try {
-      setDeployStatus(1);
-      const platformMap = { YOUTUBE: 0, TWITCH: 1, LINKEDIN: 2 };
-      const metricMap = { VIEWS: 0, CLICKS: 1, FOLLOWERS: 2, WATCH_TIME: 3, CONCURRENT_VIEWERS: 4 };
-
       const payload = {
         brandAddress: address,
-        creatorAddress: details.creatorAddress,
         title: details.title,
         description: details.description,
         milestones: milestones.map((m) => ({
@@ -645,26 +615,28 @@ export default function CreateCampaign() {
           threshold: parseInt(m.threshold),
           trancheAmount: Math.floor(parseFloat(m.trancheAmount) * 1_000_000),
           deadline: Math.floor(new Date(m.deadline).getTime() / 1000),
-          contentId: m.contentId,
+          // contentId is filled in later by the creator when submitting proof
+          contentId: "",
         })),
       };
 
-      setDeployStatus(2);
-      const { hash } = await createCampaign(payload);
-      setDeployStatus(3);
-      setTxHash(hash);
-      setDeployStatus(4);
-      toast.success("Campaign deployed successfully!");
+      const result = await createCampaign({
+        campaignData: payload,
+        onProgress: setDeployStatus,
+      });
+      setTxHash(result.txHash);
+      setDeployStatus(5);
+      toast.success("Campaign published successfully!");
     } catch (error) {
       console.error(error);
-      toast.error(error.message || "Deployment failed");
+      toast.error(error.message || "Campaign creation failed");
       setStep(3);
       setDeployStatus(0);
     }
   };
 
   return (
-    <WalletGuard>
+    <RoleGuard role="brand">
       <PageLayout>
         <div style={{ maxWidth: 680, margin: "0 auto", padding: "40px 0 80px" }}>
 
@@ -758,7 +730,7 @@ export default function CreateCampaign() {
                 }}
               >
                 {step === 3 ? (
-                  <><Zap size={14} /> Deploy Campaign</>
+                  <><Zap size={14} /> Publish Campaign</>
                 ) : (
                   <>Continue <ArrowRight size={14} /></>
                 )}
@@ -767,6 +739,6 @@ export default function CreateCampaign() {
           )}
         </div>
       </PageLayout>
-    </WalletGuard>
+    </RoleGuard>
   );
 }

@@ -2,12 +2,12 @@
 // Influencity Backend — Express Server
 // ─────────────────────────────────────────────
 
+import "./loadEnv.js";
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import campaignRoutes from "./routes/campaigns.js";
-
-dotenv.config();
+import creatorRoutes from "./routes/creators.js";
+import webhookRoutes from "./routes/webhooks.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -41,6 +41,8 @@ app.get("/health", (req, res) => {
 // ─────────────────────────────────────────────
 
 app.use("/campaigns", campaignRoutes);
+app.use("/creators", creatorRoutes);
+app.use("/webhooks", webhookRoutes);
 
 // ─────────────────────────────────────────────
 // Global Error Handler

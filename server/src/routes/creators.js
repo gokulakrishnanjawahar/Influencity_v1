@@ -12,6 +12,7 @@ import {
   getUserByWallet,
   getCampaignsForWallet,
   getReputationEvents,
+  getApplicationsForCreator,
 } from "../services/supabase.js";
 import { getCreatorReputation } from "../services/blockchain.js";
 
@@ -143,6 +144,32 @@ router.get("/:address/reputation", async (req, res, next) => {
       onChainScore: onChain?.reputationScore || 0,
       events,
       onChainHistory: onChain?.mintHistory || [],
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────
+// GET /creators/:address/applications
+// Returns all applications submitted by a creator, with their campaigns
+// ─────────────────────────────────────────────
+
+router.get("/:address/applications", async (req, res, next) => {
+  try {
+    const { address } = req.params;
+
+    if (!ethers.isAddress(address)) {
+      return res.status(400).json({ error: "Invalid wallet address" });
+    }
+
+    const applications = await getApplicationsForCreator(address.toLowerCase());
+
+    res.json({
+      success: true,
+      walletAddress: address.toLowerCase(),
+      applications,
+      total: applications.length,
     });
   } catch (error) {
     next(error);

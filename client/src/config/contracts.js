@@ -20,7 +20,6 @@ export const CAMPAIGN_FACTORY_ABI = [
     type: "function",
     stateMutability: "nonpayable",
     inputs: [
-      { name: "_creator", type: "address" },
       { name: "_ipfsBriefHash", type: "string" },
       { name: "_platforms", type: "uint8[]" },
       { name: "_metricTypes", type: "uint8[]" },
@@ -69,8 +68,25 @@ export const CAMPAIGN_FACTORY_ABI = [
       { name: "campaignId", type: "uint256", indexed: true },
       { name: "escrowAddress", type: "address", indexed: true },
       { name: "brand", type: "address", indexed: true },
-      { name: "creator", type: "address", indexed: false },
       { name: "ipfsBriefHash", type: "string", indexed: false },
+    ],
+  },
+  {
+    name: "assignCreator",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "_campaignId", type: "uint256" },
+      { name: "_creator", type: "address" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "CreatorAssigned",
+    type: "event",
+    inputs: [
+      { name: "campaignId", type: "uint256", indexed: true },
+      { name: "creator", type: "address", indexed: true },
     ],
   },
 ];
@@ -233,6 +249,36 @@ export const CAMPAIGN_ESCROW_ABI = [
     inputs: [
       { name: "campaignId", type: "uint256", indexed: true },
       { name: "remainderRefunded", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    name: "cancelCampaign",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [],
+    outputs: [],
+  },
+  {
+    name: "isCancelled",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    name: "CreatorAssigned",
+    type: "event",
+    inputs: [
+      { name: "campaignId", type: "uint256", indexed: true },
+      { name: "creator", type: "address", indexed: true },
+    ],
+  },
+  {
+    name: "CampaignCancelled",
+    type: "event",
+    inputs: [
+      { name: "campaignId", type: "uint256", indexed: true },
+      { name: "refundedToBrand", type: "uint256", indexed: false },
     ],
   },
 ];

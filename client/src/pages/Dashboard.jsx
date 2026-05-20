@@ -17,7 +17,7 @@ import StatusBadge from "@/components/shared/StatusBadge";
 import PlatformIcon from "@/components/shared/PlatformIcon";
 import LoadingSpinner, { PageLoader } from "@/components/shared/LoadingSpinner";
 import EmptyState from "@/components/shared/EmptyState";
-import { useCampaigns } from "@/hooks/useCampaign";
+import { useCampaigns, useMyApplications } from "@/hooks/useCampaign";
 import { useReputation } from "@/hooks/useReputation";
 import { useSIWE } from "@/components/wallet/SIWEProvider";
 import { truncateAddress, formatUSDC, formatDeadline } from "@/lib/utils";
@@ -278,6 +278,13 @@ export default function Dashboard() {
 
   const { data: campaigns = [], isLoading } = useCampaigns(address);
   const { score, mintHistory } = useReputation(address);
+  const { data: myApplications = [] } = useMyApplications(address);
+
+  // Applications that haven't (yet) resulted in a campaign assignment.
+  // Selected applications surface as the creator's campaigns in the list below.
+  const openApplications = myApplications.filter(
+    (a) => a.status === "pending" || a.status === "rejected"
+  );
 
   const brandCampaigns = campaigns.filter((c) => c.brand_address?.toLowerCase() === address?.toLowerCase());
   const creatorCampaigns = campaigns.filter((c) => c.creator_address?.toLowerCase() === address?.toLowerCase());
@@ -450,6 +457,87 @@ export default function Dashboard() {
                       />
                     </AreaChart>
                   </ResponsiveContainer>
+                </motion.div>
+              )}
+
+              {/* Your applications — creator only, non-selected ones */}
+              {activeRole === "creator" && openApplications.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.22 }}
+                  style={{
+                    padding: "20px 24px",
+                    borderRadius: 12,
+                    background: SURFACE,
+                    border: `1px solid ${BORDER}`,
+                    marginBottom: 20,
+                  }}
+                >
+                  <p style={{ fontSize: 13, fontWeight: 700, color: TEXT, marginBottom: 14 }}>
+                    Your applications
+                    <span style={{ color: VERY_MUTED, fontWeight: 500, marginLeft: 6 }}>
+                      ({openApplications.length})
+                    </span>
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {openApplications.map((app) => {
+                      const c = app.campaigns;
+                      const target = c?.contract_address || c?.campaign_id_onchain || c?.id;
+                      const color = app.status === "rejected" ? DANGER : WARNING;
+                      return (
+                        <div
+                          key={app.id}
+                          onClick={() => target && navigate(`/campaigns/${target}`)}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            padding: "10px 14px",
+                            borderRadius: 9,
+                            background: SURFACE2,
+                            border: `1px solid ${BORDER}`,
+                            cursor: target ? "pointer" : "default",
+                            transition: "all 0.15s",
+                          }}
+                        >
+                          <div style={{ minWidth: 0, marginRight: 12 }}>
+                            <p
+                              style={{
+                                fontSize: 12,
+                                fontWeight: 600,
+                                color: TEXT,
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                              }}
+                            >
+                              {c?.title || "Untitled campaign"}
+                            </p>
+                            <p style={{ fontSize: 10, color: VERY_MUTED, marginTop: 2 }}>
+                              Applied {new Date(app.created_at).toLocaleDateString()}
+                            </p>
+                          </div>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              textTransform: "uppercase",
+                              letterSpacing: 0.6,
+                              padding: "3px 8px",
+                              borderRadius: 100,
+                              color,
+                              background: `${color}1a`,
+                              border: `1px solid ${color}33`,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {app.status === "rejected" ? "Not selected" : "Pending"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </motion.div>
               )}
 

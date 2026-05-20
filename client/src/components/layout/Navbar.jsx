@@ -20,8 +20,8 @@ export function HexMark({ size = 28 }) {
 
 const publicLinks = [
   { label: "How it works", href: "/#how-it-works" },
-  { label: "For Brands", href: "/#brands" },
-  { label: "For Creators", href: "/#creators" },
+  { label: "For Brands", href: "/campaigns/new" },
+  { label: "For Creators", href: "/campaigns/browse" },
 ];
 
 const appLinks = [
@@ -75,9 +75,9 @@ export default function Navbar() {
           <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
             {publicLinks.map((item) => {
               return (
-                <a
+                <Link
                   key={item.label}
-                  href={item.href}
+                  to={item.href}
                   style={{
                     padding: "7px 13px",
                     borderRadius: 8,
@@ -91,7 +91,7 @@ export default function Navbar() {
                   onMouseLeave={() => setHoveredLink(null)}
                 >
                   {item.label}
-                </a>
+                </Link>
               );
             })}
 
@@ -185,9 +185,9 @@ export default function Navbar() {
           >
             {publicLinks.map((item) => {
               return (
-                <a
+                <Link
                   key={item.label}
-                  href={item.href}
+                  to={item.href}
                   onClick={() => setMobileOpen(false)}
                   style={{
                     display: "block",
@@ -199,7 +199,7 @@ export default function Navbar() {
                   }}
                 >
                   {item.label}
-                </a>
+                </Link>
               );
             })}
 

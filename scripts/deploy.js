@@ -52,13 +52,15 @@ async function main() {
   const campaignFactoryAddress = await campaignFactory.getAddress();
   console.log(`   ✓ CampaignFactory → ${campaignFactoryAddress}\n`);
 
-  // ── 5. Authorize CampaignFactory as minter ──
-  console.log("5. Authorizing CampaignFactory as minter...");
-const authTx = await reputationToken.authoriseMinter(
+  // ── 5. Register CampaignFactory on ReputationToken ──
+  // The factory auto-authorises each escrow it deploys as a reputation minter,
+  // so it must be registered as the factory on the ReputationToken first.
+  console.log("5. Registering CampaignFactory on ReputationToken...");
+  const factoryTx = await reputationToken.setCampaignFactory(
     campaignFactoryAddress
   );
-  await authTx.wait();
-  console.log("   ✓ Authorized\n");
+  await factoryTx.wait();
+  console.log("   ✓ Registered\n");
 
   // ── 6. Mint test USDC to deployer ──
   console.log("6. Minting 10,000 test USDC to deployer...");
