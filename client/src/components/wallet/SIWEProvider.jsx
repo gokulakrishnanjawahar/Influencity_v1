@@ -23,13 +23,15 @@ export function SIWEProvider({ children }) {
     () => localStorage.getItem("influencity_role") || null
   );
 
-  // Build SIWE message
+  // Build SIWE message.
+  // IMPORTANT: This string is sent as an HTTP header (x-siwe-message), which
+  // must be ISO-8859-1. Keep it ASCII-only — no em dashes, curly quotes, etc.
   const buildMessage = useCallback((address, nonce) => {
     return [
       "Influencity wants you to sign in with your Ethereum account:",
       address,
       "",
-      "Sign in to Influencity — Decentralised Influencer Sponsorship Protocol",
+      "Sign in to Influencity - Decentralised Influencer Sponsorship Protocol",
       "",
       `Nonce: ${nonce}`,
       `Issued At: ${new Date().toISOString()}`,
@@ -68,9 +70,19 @@ export function SIWEProvider({ children }) {
   const ensureAuth = useCallback(async () => {
     const stored = sessionStorage.getItem("siwe_address");
     const sig = sessionStorage.getItem("siwe_signature");
+    const msg = sessionStorage.getItem("siwe_message") || "";
 
-    if (stored && sig && stored.toLowerCase() === address?.toLowerCase()) {
-      // Already signed for this wallet
+    // The message is sent verbatim as an HTTP header, which must be ISO-8859-1.
+    // If the stored message contains any non-Latin-1 codepoint, discard the
+    // session and force a fresh sign so fetch doesn't reject the headers.
+    const messageIsHeaderSafe = [...msg].every((c) => c.charCodeAt(0) <= 0xff);
+
+    if (
+      stored &&
+      sig &&
+      messageIsHeaderSafe &&
+      stored.toLowerCase() === address?.toLowerCase()
+    ) {
       setIsAuthenticated(true);
       return;
     }
@@ -110,12 +122,19 @@ export function SIWEProvider({ children }) {
     setIsAuthenticated(false);
   }, []);
 
-  // Get auth headers for API calls
+  // Get auth headers for API calls.
+  // The SIWE message contains newlines (per spec), which fetch refuses in
+  // header values — so we base64-encode it for transport. The backend
+  // decodes it before verifying the signature against the original plaintext.
   const getAuthHeaders = useCallback(() => {
+    const message = sessionStorage.getItem("siwe_message") || "";
+    const encoded = message
+      ? btoa(unescape(encodeURIComponent(message)))
+      : "";
     return {
       "x-wallet-address": sessionStorage.getItem("siwe_address") || "",
       "x-wallet-signature": sessionStorage.getItem("siwe_signature") || "",
-      "x-siwe-message": sessionStorage.getItem("siwe_message") || "",
+      "x-siwe-message": encoded,
     };
   }, []);
 
