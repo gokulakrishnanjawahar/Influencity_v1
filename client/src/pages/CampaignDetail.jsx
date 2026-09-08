@@ -921,8 +921,9 @@ export default function CampaignDetail() {
           {/* Header */}
           <div
             style={{
-              display: "grid", gridTemplateColumns: "1fr auto",
-              gap: 20, alignItems: "flex-start", marginBottom: 32,
+              display: "flex", flexWrap: "wrap",
+              gap: 20, alignItems: "flex-start", justifyContent: "space-between",
+              marginBottom: 32,
             }}
           >
             <div>
@@ -1009,7 +1010,7 @@ export default function CampaignDetail() {
           </div>
 
           {/* Stats row — FIX 3 applied: totalUSDC passed directly, not * 1_000_000 */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 32 }}>
+          <div className="r-grid-4" style={{ gap: 12, marginBottom: 32 }}>
             {[
               { label: "Total locked", value: `$${formatUSDC(totalUSDC)}`, icon: Lock },
               {
@@ -1059,7 +1060,7 @@ export default function CampaignDetail() {
           </div>
 
           {/* Main grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 20 }}>
+          <div className="r-grid-sidebar">
 
             {/* Left — applicants (brand only) + milestones */}
             <div>

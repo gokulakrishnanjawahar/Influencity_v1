@@ -245,7 +245,7 @@ function MilestoneRow({ milestone, index, onChange, onRemove, canRemove }) {
         )}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+      <div className="r-grid-2" style={{ gap: 12, marginBottom: 12 }}>
         <Field label="Platform">
           <Select
             value={milestone.platform}

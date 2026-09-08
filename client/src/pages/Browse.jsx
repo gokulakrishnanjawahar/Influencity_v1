@@ -180,7 +180,7 @@ export default function Browse() {
           <div style={{ marginBottom: 28 }}>
             <h1
               style={{
-                fontSize: 28,
+                fontSize: "clamp(24px, 2.33vw, 28px)",
                 fontWeight: 900,
                 color: TEXT,
                 letterSpacing: -1,
@@ -206,7 +206,7 @@ export default function Browse() {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 280px), 1fr))",
                 gap: 14,
               }}
             >
