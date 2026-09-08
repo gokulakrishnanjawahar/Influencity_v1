@@ -1,9 +1,10 @@
 {
-  "network": "baseSepolia",
-  "deployer": "0x396b1c651786F2aEFecc58668b2A33BCe816Be61",
-  "mockUSDC": "0xD04F827e4C76b5973b79ab933BddF4BE587c649c",
-  "reputationToken": "0xf301Bf10fE6c36191a14c81A0b4d026e7C60E009",
-  "mockMetricsOracle": "0xd091C01b1fe3321CA6B3124BE6221F67bB6662b2",
-  "campaignFactory": "0xCCEb4912F5D9D073bFA5a2BEACA79dF1C0828E0b",
-  "deployedAt": "2026-05-20T05:47:07.145Z"
+  "network": null,
+  "deployer": null,
+  "mockUSDC": null,
+  "reputationToken": null,
+  "mockMetricsOracle": null,
+  "campaignFactory": null,
+  "deployedAt": null,
+  "_comment": "Reset for the Polygon migration. The previous values were Base Sepolia addresses and do not exist on Polygon. Run `npx hardhat run scripts/deploy.js --network polygonAmoy` to repopulate this file."
 }

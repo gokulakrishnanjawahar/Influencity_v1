@@ -15,6 +15,7 @@ import { useReputation, useReputationEvents } from "@/hooks/useReputation";
 import { useCampaigns } from "@/hooks/useCampaign";
 import { formatUSDC, truncateAddress } from "@/lib/utils";
 import { PLATFORMS, METRIC_TYPES } from "@/lib/constants";
+import { explorerAddressUrl, EXPLORER_NAME } from "@/config/wagmi";
 import { toast } from "sonner";
 
 // ─────────────────────────────────────────────
@@ -337,13 +338,13 @@ export default function CreatorProfile() {
                 </button>
 
                 <a
-                  href={`https://sepolia.basescan.org/address/${profileAddress}`}
+                  href={explorerAddressUrl(profileAddress)}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ display: "flex", alignItems: "center", gap: 4, color: VERY_MUTED, fontSize: 11, textDecoration: "none" }}
                 >
                   <ExternalLink size={10} />
-                  Basescan
+                  {EXPLORER_NAME}
                 </a>
               </div>
             </div>

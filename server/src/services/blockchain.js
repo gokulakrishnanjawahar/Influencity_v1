@@ -53,9 +53,23 @@ function getContractPath(contractName) {
 // Provider + Signer Setup
 // ─────────────────────────────────────────────
 
-/// @notice Creates a read-only provider for querying contract state
+/// @notice Creates a read-only provider for querying contract state.
+/// RPC_URL must point at the same chain the contract addresses below were
+/// deployed to (Polygon Amoy in the default setup).
+///
+/// There is deliberately NO default here. A hardcoded fallback would let a
+/// missing or renamed env var silently redirect every read to the wrong
+/// chain, where our addresses hold no code — and reads against a codeless
+/// address return empty data rather than erroring, so the failure would
+/// surface as "no campaigns found" rather than as a misconfiguration.
 export function getProvider() {
-  const rpcUrl = process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
+  const rpcUrl = process.env.RPC_URL;
+  if (!rpcUrl) {
+    throw new Error(
+      "RPC_URL not set in .env — required to reach the chain. " +
+        "Set it to your Polygon Amoy or Polygon mainnet RPC endpoint."
+    );
+  }
   return new ethers.JsonRpcProvider(rpcUrl);
 }
 

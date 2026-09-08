@@ -13,6 +13,7 @@ import PlatformIcon from "@/components/shared/PlatformIcon";
 import { useCreateCampaign } from "@/hooks/useCampaign";
 import { useIPFS } from "@/hooks/useIPFS";
 import { PLATFORM_METRICS } from "@/lib/constants";
+import { NETWORK_NAME, NATIVE_CURRENCY_SYMBOL } from "@/config/wagmi";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -424,7 +425,7 @@ function Step3({ details, milestones }) {
       <div style={{ padding: "14px 16px", borderRadius: 10, background: `rgba(251,146,60,0.04)`, border: `1px solid rgba(251,146,60,0.15)`, display: "flex", gap: 10 }}>
         <AlertCircle size={14} style={{ color: WARNING, flexShrink: 0, marginTop: 1 }} />
         <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.6 }}>
-          Deploying will upload the brief to IPFS, deploy a CampaignEscrow contract, and require a USDC approval + deposit transaction from your wallet. Make sure you have enough USDC on Base Sepolia.
+          Deploying will upload the brief to IPFS, deploy a CampaignEscrow contract, and require a USDC approval + deposit transaction from your wallet. Make sure you have enough USDC and {NATIVE_CURRENCY_SYMBOL} for gas on {NETWORK_NAME}.
         </p>
       </div>
     </motion.div>

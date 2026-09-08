@@ -26,6 +26,7 @@ import { useSIWE } from "@/components/wallet/SIWEProvider";
 import { useMilestones } from "@/hooks/useMilestones";
 import { useIPFS } from "@/hooks/useIPFS";
 import { formatUSDC, formatDeadline, truncateAddress, timeUntil, milestoneProgress } from "@/lib/utils";
+import { explorerAddressUrl, EXPLORER_NAME, NETWORK_NAME } from "@/config/wagmi";
 import { toast } from "sonner";
 
 // ─────────────────────────────────────────────
@@ -957,10 +958,10 @@ export default function CampaignDetail() {
                   </button>
                 )}
 
-                {/* FIX 4: Restored missing opening <a> tag for Basescan link */}
+                {/* FIX 4: Restored missing opening <a> tag for explorer link */}
                 {campaign.contract_address && (
                   <a
-                    href={`https://sepolia.basescan.org/address/${campaign.contract_address}`}
+                    href={explorerAddressUrl(campaign.contract_address)}
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{
@@ -969,7 +970,7 @@ export default function CampaignDetail() {
                     }}
                   >
                     <ExternalLink size={10} />
-                    View on Basescan
+                    View on {EXPLORER_NAME}
                   </a>
                 )}
 
@@ -1268,7 +1269,7 @@ export default function CampaignDetail() {
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {[
                     { label: "Oracle", value: "Chainlink Functions" },
-                    { label: "Network", value: "Base Sepolia" },
+                    { label: "Network", value: NETWORK_NAME },
                     { label: "Automation", value: "Chainlink Upkeep" },
                     { label: "Storage", value: "IPFS + Filecoin" },
                   ].map(({ label, value }) => (

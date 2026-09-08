@@ -6,6 +6,7 @@ import { API_BASE } from "@/lib/constants";
 import { CAMPAIGN_FACTORY_ABI, CAMPAIGN_ESCROW_ABI, USDC_ABI, CONTRACT_ADDRESSES, USDC_ADDRESS } from "@/config/contracts";
 import { useSIWE } from "@/components/wallet/SIWEProvider";
 import { parseUSDC } from "@/lib/constants";
+import { TX_CONFIRMATIONS } from "@/config/wagmi";
 
 // ─── Fetch campaign from backend ───
 export function useCampaign(idOrAddress) {
@@ -143,8 +144,11 @@ export function useCreateCampaign() {
           contractParams.contentIds,
         ],
       });
+      // The escrow address is read out of this receipt's logs and then written
+      // to Supabase — it must not be able to reorg away underneath us.
       const createReceipt = await publicClient.waitForTransactionReceipt({
         hash: createHash,
+        confirmations: TX_CONFIRMATIONS,
       });
 
       // Decode the CampaignCreated event to get the escrow address + on-chain id
@@ -167,7 +171,10 @@ export function useCreateCampaign() {
         functionName: "approve",
         args: [escrowAddress, totalAmount],
       });
-      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      await publicClient.waitForTransactionReceipt({
+        hash: approveHash,
+        confirmations: TX_CONFIRMATIONS,
+      });
 
       // 4. Deposit USDC into the escrow
       report(4);
@@ -177,7 +184,10 @@ export function useCreateCampaign() {
         functionName: "deposit",
         args: [totalAmount],
       });
-      await publicClient.waitForTransactionReceipt({ hash: depositHash });
+      await publicClient.waitForTransactionReceipt({
+        hash: depositHash,
+        confirmations: TX_CONFIRMATIONS,
+      });
 
       // 5. Confirm — persist the campaign + milestones to the backend
       report(5);
@@ -267,7 +277,10 @@ export function useSelectCreator(idOrAddress) {
         functionName: "assignCreator",
         args: [BigInt(campaignIdOnchain), creatorAddress],
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await publicClient.waitForTransactionReceipt({
+        hash,
+        confirmations: TX_CONFIRMATIONS,
+      });
 
       const res = await fetch(`${API_BASE}/campaigns/${idOrAddress}/select`, {
         method: "POST",
@@ -305,7 +318,10 @@ export function useCancelCampaign(idOrAddress) {
         functionName: "cancelCampaign",
         args: [],
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await publicClient.waitForTransactionReceipt({
+        hash,
+        confirmations: TX_CONFIRMATIONS,
+      });
 
       const res = await fetch(`${API_BASE}/campaigns/${idOrAddress}/cancel`, {
         method: "POST",

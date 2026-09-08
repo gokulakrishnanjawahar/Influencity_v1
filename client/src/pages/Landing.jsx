@@ -697,7 +697,7 @@ function TerminalLog() {
   const [lines, setLines] = useState([]);
 
   const LOG = [
-    { text: "$ influencity deploy --network base-sepolia", color: VERY_MUTED },
+    { text: "$ influencity deploy --network polygon-amoy", color: VERY_MUTED },
     { text: "  Compiling contracts...", color: VERY_MUTED },
     { text: "  ✓ CampaignFactory deployed → 0xA3f7...8B2c", color: MUTED },
     { text: "  ✓ ReputationToken deployed → 0xF2c1...4A9d", color: MUTED },
@@ -960,7 +960,7 @@ export default function Landing() {
                   animate={{ opacity: [1, 0.3, 1] }}
                   transition={{ duration: 1.5, repeat: Infinity }}
                 />
-                <span style={{ fontSize: 11, color: MUTED }}>Live on Base Sepolia · Chainlink · IPFS</span>
+                <span style={{ fontSize: 11, color: MUTED }}>Live on Polygon Amoy · Chainlink · IPFS</span>
               </motion.div>
 
               {/* Headline */}
@@ -1116,7 +1116,7 @@ export default function Landing() {
         <Marquee items={[
           "Smart Contract Escrow", "Chainlink Oracle Verification", "IPFS Content Proofs",
           "Soulbound Reputation Tokens", "Zero Platform Fees", "Automatic Payouts",
-          "YouTube · Twitch · LinkedIn", "Non-Custodial", "Base L2", "Filecoin Storage",
+          "YouTube · Twitch · LinkedIn", "Non-Custodial", "Polygon PoS", "Filecoin Storage",
         ]} speed={38} />
       </div>
 
@@ -1346,7 +1346,7 @@ export default function Landing() {
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {[
                   { icon: Shield, text: "OpenZeppelin-based contracts with full test suite" },
-                  { icon: Activity, text: "Hardhat deployment scripts for Base + Base Sepolia" },
+                  { icon: Activity, text: "Hardhat deployment scripts for Polygon + Polygon Amoy" },
                   { icon: Globe, text: "REST API for all campaign and proof operations" },
                 ].map(({ icon: Icon, text }) => (
                   <div key={text} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
@@ -1511,7 +1511,7 @@ export default function Landing() {
         </Reveal>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", maxWidth: 900, margin: "0 auto" }}>
           {[
-            { name: "Base", desc: "L2 Ethereum" },
+            { name: "Polygon", desc: "PoS sidechain" },
             { name: "Chainlink Functions", desc: "Oracle network" },
             { name: "Chainlink Automation", desc: "Trustless scheduling" },
             { name: "IPFS + Filecoin", desc: "Storage proofs" },
@@ -1652,7 +1652,7 @@ export default function Landing() {
             <span style={{ fontSize: 13, fontWeight: 800, color: TEXT }}>Influencity</span>
           </div>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-            {["Base", "Chainlink Functions", "IPFS + Filecoin", "OpenZeppelin"].map((t) => (
+            {["Polygon", "Chainlink Functions", "IPFS + Filecoin", "OpenZeppelin"].map((t) => (
               <span key={t} style={{ fontSize: 11, color: VERY_MUTED }}>{t}</span>
             ))}
           </div>

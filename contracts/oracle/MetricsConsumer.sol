@@ -119,7 +119,10 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
     // Constructor
     // ─────────────────────────────────────────────
 
-    /// @param _router         Chainlink Functions router address (Base Sepolia / Base mainnet)
+    /// @param _router         Chainlink Functions router address (Polygon Amoy / Polygon mainnet).
+    ///                        VERIFY against Chainlink's supported-networks docs
+    ///                        before deploying — routers are network-specific and
+    ///                        do get reissued.
     /// @param _subscriptionId Chainlink subscription ID (created on functions.chain.link)
     /// @param _donId          DON ID for the target network
     constructor(

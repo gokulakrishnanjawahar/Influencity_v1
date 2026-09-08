@@ -5,7 +5,7 @@
 
 ## What it is
 
-Web3 influencer-marketing **escrow + marketplace** on **Base**. Brands post
+Web3 influencer-marketing **escrow + marketplace** on **Polygon**. Brands post
 public campaign listings funded in USDC. Creators browse, apply with a pitch
 and social links. The brand picks one applicant — at that moment the agreement
 is formed on-chain. From there, oracle-verified milestones release USDC
@@ -17,7 +17,7 @@ withdraw an open listing before picking a creator and get the USDC back.
 | Layer        | Tech |
 |--------------|------|
 | Contracts    | Solidity 0.8.24, Hardhat 3, OpenZeppelin 5, Chainlink |
-| Network      | Base Sepolia (chainId 84532) for now |
+| Network      | Polygon Amoy (chainId 80002) for now; Polygon mainnet (137) configured |
 | Backend      | Express 5 (ESM), Supabase (Postgres), Pinata (IPFS) |
 | Frontend     | React 19 + Vite 8, wagmi 2 + RainbowKit + viem, TanStack Query, react-router 7, Tailwind 4 + shadcn/ui |
 | Auth         | SIWE (Sign-In With Ethereum) |
@@ -122,17 +122,42 @@ Routes (`App.jsx`): `/`, `/dashboard`, `/campaigns/browse`, `/campaigns/new`,
   `useCancelCampaign`, `useMyApplications`. `useCreateCampaign` rewritten
   for the full create flow (uses `usePublicClient` + `parseEventLogs`).
 
-## Current Base Sepolia addresses (2026-05-20)
+## Deployed addresses
+
+**None yet on Polygon.** The Base Sepolia deployment was abandoned in the
+`polygon` branch migration (2026-09-08) — those addresses do not exist on
+Polygon. `deployments.json` is reset to nulls until a deploy is run:
 
 ```
-CampaignFactory     0xCCEb4912F5D9D073bFA5a2BEACA79dF1C0828E0b
-ReputationToken     0xf301Bf10fE6c36191a14c81A0b4d026e7C60E009
-MockUSDC            0xD04F827e4C76b5973b79ab933BddF4BE587c649c
-MockMetricsOracle   0xd091C01b1fe3321CA6B3124BE6221F67bB6662b2
-Deployer            0x396b1c651786F2aEFecc58668b2A33BCe816Be61
+npx hardhat run scripts/deploy.js --network polygonAmoy
 ```
 
-Both root `.env` and `client/.env.local` already point at these.
+Then copy the printed addresses into root `.env` and `client/.env.local`
+(templates: `.env.example`, `client/.env.example`).
+
+## Polygon migration notes (branch `polygon`, 2026-09-08)
+
+- Env vars renamed: `BASE_SEPOLIA_RPC_URL`/`BASE_MAINNET_RPC_URL` →
+  `POLYGON_AMOY_RPC_URL`/`POLYGON_MAINNET_RPC_URL`; `BASESCAN_API_KEY` →
+  `ETHERSCAN_API_KEY` (Etherscan V2 is one multichain key — Polygonscan V1
+  keys are deprecated). The backend now reads its own `RPC_URL` and **throws**
+  if unset instead of silently defaulting to a public Base endpoint.
+- `client/src/config/wagmi.js` is now the single source of chain truth:
+  `EXPECTED_CHAIN_ID` (override with `VITE_CHAIN_ID`), explorer URL/name
+  helpers, and `TX_CONFIRMATIONS`. Explorer links are derived from the chain
+  definition rather than hardcoded, so no `basescan.org` strings remain.
+- **NetworkGuard** (`components/wallet/NetworkGuard.jsx`) blocks the UI when
+  the wallet is on the wrong chain. Mounted inside `WalletGuard`, so every
+  wallet-gated page inherits it. Needed because an EVM call to an address with
+  no code *succeeds* — on the wrong network a deploy burns gas and reports
+  success, then fails on the missing event.
+- `waitForTransactionReceipt` now waits `TX_CONFIRMATIONS` (3) on all five
+  write paths. Polygon PoS reorgs where Base's single sequencer did not, and
+  each write is followed by a Supabase persist.
+- **Not migrated:** the oracle layer still deploys `MockMetricsOracle`.
+  `MetricsConsumer`/`AutomationHandler` remain undeployed by any script, as on
+  Base. Going live needs Polygon router + DON IDs, a funded LINK subscription,
+  re-uploaded DON secrets, and wiring code that has never existed.
 
 ## Working agreement
 

@@ -6,6 +6,7 @@ import { useAccount } from "wagmi";
 import { motion } from "framer-motion";
 import { Wallet, Shield } from "lucide-react";
 import { ConnectButton as RainbowConnectButton } from "@rainbow-me/rainbowkit";
+import NetworkGuard from "./NetworkGuard";
 
 export default function WalletGuard({ children }) {
   const { isConnected, isConnecting } = useAccount();
@@ -68,5 +69,7 @@ export default function WalletGuard({ children }) {
     );
   }
 
-  return children;
+  // Wallet is connected — now make sure it's pointed at the right chain before
+  // any page below can send a transaction against chain-specific addresses.
+  return <NetworkGuard>{children}</NetworkGuard>;
 }

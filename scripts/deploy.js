@@ -8,13 +8,29 @@ async function main() {
   const [deployer] = await ethers.getSigners();
 
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("  Influencity — Deploying to Base Sepolia");
+  console.log(`  Influencity — Deploying to ${connection.networkName}`);
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log(`  Deployer: ${deployer.address}`);
 
   const balance = await ethers.provider.getBalance(deployer.address);
-  console.log(`  Balance:  ${ethers.formatEther(balance)} ETH`);
+  // Gas on Polygon is paid in POL, not ETH — formatEther is just the
+  // 18-decimal formatter and is still correct for the amount.
+  console.log(`  Balance:  ${ethers.formatEther(balance)} POL`);
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+  // ── Mainnet guard ──
+  // This script deploys MockUSDC and a mock oracle, both of which carry
+  // "NEVER deploy this to mainnet" in their source. Polygon mainnet is
+  // configured in hardhat.config.js so that verification and future scripts
+  // can target it — not so that this script can. Going to mainnet means
+  // pointing at real USDC and a real MetricsConsumer first.
+  if (connection.networkName === "polygon") {
+    throw new Error(
+      "Refusing to run: this script deploys MockUSDC and MockMetricsOracle, " +
+        "which must never reach mainnet. Write a mainnet deploy script that " +
+        "uses real USDC and a real Chainlink MetricsConsumer instead."
+    );
+  }
 
   // ── 1. Deploy MockUSDC ──
   console.log("1. Deploying MockUSDC...");
@@ -72,7 +88,7 @@ const mintTx = await mockUSDC.faucet(
 
   // ── Save addresses ──
   const addresses = {
-    network: "baseSepolia",
+    network: connection.networkName,
     deployer: deployer.address,
     mockUSDC: usdcAddress,
     reputationToken: reputationTokenAddress,
