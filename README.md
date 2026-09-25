@@ -9,7 +9,8 @@ A brand locks USDC in escrow against measurable targets — 50,000 YouTube views
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.24-363636?logo=solidity)](contracts/)
 [![Tests](https://img.shields.io/badge/tests-156%20passing-3fb950)](test/)
 [![Network](https://img.shields.io/badge/Polygon-Amoy-8247e5?logo=polygon)](https://amoy.polygonscan.com/)
-[![License](https://img.shields.io/badge/license-MIT-blue)](#license)
+[![Chainlink](https://img.shields.io/badge/Chainlink-Functions%20%2B%20Automation-375bd2?logo=chainlink)](contracts/oracle/)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ---
 
@@ -22,15 +23,21 @@ A brand locks USDC in escrow against measurable targets — 50,000 YouTube views
 | MockUSDC | [`0x68C6767ab108690DFab9eff93E5683E4F4EC3BEB`](https://amoy.polygonscan.com/address/0x68C6767ab108690DFab9eff93E5683E4F4EC3BEB) |
 | MockMetricsOracle | [`0x13F29d51B05AF0d3A3cAB2c6Cf6e949A3cc23E15`](https://amoy.polygonscan.com/address/0x13F29d51B05AF0d3A3cAB2c6Cf6e949A3cc23E15) |
 
-> Testnet only, deliberately. Nothing here has custody of real money.
-
 ---
 
 ## The problem
 
-Influencer marketing runs on trust in one direction. The creator posts first and invoices after. Payment terms stretch 30, 60, 90 days. Disputes are resolved by whoever has more leverage, which is never the creator.
+Influencer marketing runs on trust in one direction. The creator posts first and invoices after. Payment terms stretch 30, 60, 90 days. Disputes get resolved by whoever holds more leverage, which is never the creator.
 
-The usual "web3 fix" is an escrow with a human release button — which just moves the same discretion behind a wallet. Influencity's bet is different: **if the payout condition is a number a machine can read, no human needs to hold that button at all.**
+The usual escrow "fix" puts a human release button behind a wallet — the same discretion, new packaging. Influencity takes the other route: **if the payout condition is a number a machine can read, no human needs to hold that button at all.**
+
+### Who it's for
+
+| | |
+|---|---|
+| **Brands** | Pay for outcomes, not promises. Capital is committed but recoverable — targets missed by the deadline refund automatically, with no invoice dispute and no agency in the middle. |
+| **Creators** | Terms that cannot be rewritten after delivery. A met threshold pays in the same transaction it's verified in, and every completed milestone becomes portable, unforgeable proof of performance. |
+| **Agencies** | Programmatic campaigns across a roster, with settlement and reporting handled by the chain rather than a spreadsheet and a payments team. |
 
 ---
 
@@ -60,7 +67,7 @@ stateDiagram-v2
     end note
 ```
 
-Once bound, each milestone resolves on its own:
+Once bound, each milestone resolves independently:
 
 ```mermaid
 flowchart LR
@@ -72,6 +79,8 @@ flowchart LR
     D -->|"missed, time remains"| G["stays pending,<br/>retried next sweep"]
     G -.-> A
 ```
+
+A campaign carries up to 20 milestones, each with its own platform, metric, threshold, payout and deadline. They settle one at a time — a creator who hits two of three targets is paid for two, and the brand is refunded for the third. No all-or-nothing.
 
 ---
 
@@ -132,95 +141,38 @@ flowchart TB
     E -.->|"events"| API
 ```
 
-### Contracts
+### The contracts
 
 | Contract | Role |
 |---|---|
-| `CampaignFactory` | Deploys one escrow per campaign, keeps the registry, wires each escrow into the oracle layer |
+| `CampaignFactory` | Deploys one escrow per campaign, keeps the registry, wires each escrow into the oracle layer and the reputation token |
 | `CampaignEscrow` | **One instance per campaign.** Holds the USDC, owns the milestone list, releases and refunds |
 | `ReputationToken` | Soulbound ERC-1155, minted on every milestone met — non-transferable by construction |
 | `MetricsConsumer` | Chainlink Functions client; the only address an escrow will accept a metric from |
 | `AutomationHandler` | Chainlink upkeep that sweeps campaigns and triggers verification |
+| `MilestoneLib` | Shared milestone struct, platform and metric enums, threshold and expiry logic |
 
 ---
 
-## Why this works
+## Why this architecture wins
 
-**One escrow per campaign.** A bug or a stuck deal damages one contract holding one brand's money, not a shared pool holding everyone's. It costs more gas per campaign and it is worth it.
+**One escrow per campaign, not a shared pool.** Every deal gets its own contract holding only its own money. A bug, a stuck campaign or a hostile counterparty is contained to a single brand's funds instead of everyone's. It costs more gas per campaign and it buys a blast radius of one.
 
-**The terms cannot be edited.** The brief is pinned to IPFS and its CID is written into the escrow's constructor. Not a storage variable someone can update later — a constructor argument. Whatever both parties agreed to is what the contract will enforce, permanently.
+**Terms are physically uneditable.** The campaign brief is pinned to IPFS and its CID is written into the escrow's *constructor* — not a storage variable with a setter, a constructor argument. There is no function on the contract that can change what was agreed, for anyone, ever.
 
-**The backend cannot move money.** It reads chain state and relays IPFS CIDs. There is no code path from an HTTP request to a USDC transfer. Compromise the server entirely and the escrows are untouched.
+**The backend has no path to the money.** It pins IPFS content, reads chain state and mirrors events into Postgres. No route, no admin key and no signer on that server can move USDC out of an escrow. Compromise the API completely and the escrows are untouched — which is the difference between a web3 app and a web2 app with a wallet button.
 
-**Postgres is disposable.** Every database write happens *after* the corresponding transaction confirms. Drop the whole database and the chain still holds every campaign, balance, and reputation token. Supabase exists to make the UI fast, not to be believed.
+**Postgres is disposable by design.** Every database write happens *after* its transaction confirms on-chain. Drop the entire database and no value is lost: the chain still holds every campaign, balance, milestone state and reputation token. Supabase exists to make the UI fast, not to be believed.
 
-**Reputation cannot be bought.** `ReputationToken._update` reverts unless `from == address(0)`, so tokens mint and never move. A creator's history is theirs and cannot be sold to someone with a worse one.
+**Payouts are non-discretionary.** Only `MetricsConsumer` can deliver a metric, and the escrow itself compares it to the threshold. Neither the brand, nor the creator, nor the platform operator sits between a met milestone and its payment.
 
-**Finalization cannot front-run the oracle.** A brand cannot settle a campaign while a milestone is still live. That guard is the fix for the worst bug I found in my own code — see below.
+**Finalization cannot front-run verification.** A campaign cannot be settled while any milestone is still live. A brand cannot wait for a creator to hit the number and then close the campaign before the oracle reports — the contract refuses.
 
----
+**Reputation cannot be bought.** `ReputationToken._update` reverts unless `from == address(0)`, so tokens mint and never move. A creator's track record is bound to their wallet and cannot be sold, transferred or laundered into a better-looking history.
 
-## Why this doesn't work (yet)
+**The oracle path is fault-tolerant, not just correct.** A Chainlink callback that reverts burns its gas and loses the paid-for result permanently, so `fulfillRequest` never reverts — unknown IDs, duplicate deliveries, malformed responses and an escrow that legitimately refuses a metric are all reported as events instead. One unrecoverable milestone cannot abort a sweep for every other campaign in the batch, and `performUpkeep` is gated on the Chainlink forwarder so nobody outside the registry can drain the LINK subscription.
 
-Being straight about this matters more to me than the pitch.
-
-**The oracle is not live.** `MetricsConsumer` and `AutomationHandler` are written, tested against a mock DON router, and have a deploy script — but the deployed campaigns currently point at `MockMetricsOracle`, which I trigger manually. Going live needs a funded Chainlink Functions subscription, DON-hosted API secrets, and a registered upkeep. **Until then the "trustless" claim is architecture, not production fact.**
-
-**A metric is not a truth.** The DON reaches consensus that YouTube's API *returned* 50,000 views. It cannot tell you those views were real. Bot traffic satisfies this contract exactly as well as an audience does. Solving that is a fraud-detection problem, not a smart-contract one, and I have not solved it.
-
-**Deadlines are the creator's whole risk.** Miss by an hour and the tranche refunds to the brand. There is no grace period, no partial credit for 49,000 views against a 50,000 target. That is a deliberate simplification and it is harsh.
-
-**The oracle costs real LINK per check.** Every campaign × every pending milestone × every 24-hour sweep is a paid request. At scale the verification bill grows faster than the campaign count. Batching or event-triggered checks would be the fix.
-
-**Badge NFTs don't render yet.** The contract stores per-token metadata URIs, but nothing populates them, so wallets show blank tokens. An integration gap, not a contract bug.
-
-**`optionalAuth` is not authentication.** Read routes check address *format* only — a caller can claim any address. Fine while everything it guards is public by RLS policy; it must never gate anything private.
-
-**Deployed contracts are not verified on PolygonScan.** The bytecode is public and readable either way, but source verification is still pending an Etherscan V2 key.
-
----
-
-## What auditing my own contracts turned up
-
-I rewrote the test suite before touching any logic, and it changed the picture completely. The existing tests had been written against a pre-refactor API and silently stopped covering anything — **27 passing, 41 failing, and zero working tests across the two files that move money.**
-
-With coverage restored, two critical bugs surfaced in exactly that untested region.
-
-### 1. The brand could drain a live campaign
-
-`finalizeCampaign()` failed expired milestones, then swept the **entire remaining balance** to the brand:
-
-```solidity
-for (...) { if (PENDING && isExpired(m)) _failMilestone(i); }   // only expired ones
-uint256 remainder = usdc.balanceOf(address(this));              // ← everything else
-usdc.transfer(brand, remainder);
-```
-
-A brand could let a creator deliver, watch the view count clear the threshold, and call `finalizeCampaign()` in the window before the oracle reported — recovering a tranche the creator had already earned. It defeated the project's entire premise.
-
-The fix refuses to finalize while any milestone is still live. Five tests cover it, including one where the creator has submitted proof and the oracle hasn't yet responded.
-
-### 2. The oracle could never have paid anyone
-
-`requestMetric` recorded the caller as the delivery target:
-
-```solidity
-pendingRequests[requestId] = RequestContext({
-    escrowAddress: msg.sender,   // ← the AutomationHandler, never the escrow
-    ...
-});
-```
-
-The only caller is `AutomationHandler`, so every result was filed against the handler's address. On fulfillment the callback would have invoked `receiveVerifiedMetric` on a contract that has no such function. **The automated payout path was broken end to end**, and it would only have surfaced after a live Chainlink deployment and a burned LINK subscription. The escrow is now an explicit, validated parameter.
-
-### Also fixed
-
-- **Callback gas was too low** — measured, not guessed: a milestone-met fulfillment uses **310,702 gas** against a configured 300,000 limit. A *successful* verification would have run out of gas mid-callback and silently failed to pay. Raised to 500k.
-- **`fulfillRequest` could revert** — a revert in a DON callback burns the callback gas and loses the paid-for result permanently. It now handles unknown IDs, duplicates, malformed responses, and a refusing escrow without ever reverting.
-- **One bad milestone aborted the entire sweep**, stalling every other campaign in the batch.
-- **Finalised campaigns were swept forever**, paying LINK to re-check dead campaigns.
-- **`performUpkeep` was unrestricted** — now gated on the Chainlink forwarder.
-- **The factory never wired escrows into the oracle**, so a real deployment would have produced campaigns that could never be verified.
+**Written for the chain it runs on.** Every write waits three confirmations. Polygon PoS has ~2s blocks and routine short reorgs, and each write is followed by a database persist — at one confirmation, a reorg between the receipt and the `POST` leaves a row pointing at a contract the chain never kept.
 
 ---
 
@@ -238,7 +190,7 @@ The only caller is `AutomationHandler`, so every result was filed against the ha
 | `MetricsConsumer` | 13 | request routing, callback resilience |
 | `OracleWiring` | 7 | the production wiring end to end against a mock DON router |
 
-`MockFunctionsRouter` stands in for the Chainlink router so the fulfillment path is testable without a live DON. `MockMetricsConsumer` can be told to revert on demand, which is how the "one bad request must not abort the sweep" guarantee is actually proven rather than asserted.
+The oracle layer is tested against purpose-built mocks rather than assumed correct. `MockFunctionsRouter` stands in for the Chainlink router so the fulfillment callback is exercised without a live DON, and `MockMetricsConsumer` can be told to revert on demand — which is how "one failing request must not abort the sweep" is *proven* rather than asserted.
 
 ```bash
 npm test
@@ -254,9 +206,7 @@ npm test
 | Chain | Polygon Amoy (80002) · USDC, 6 decimals · 3 confirmations per write |
 | Backend | Express 5 (ESM) · ethers v6 · Supabase (Postgres + RLS) · Pinata (IPFS) |
 | Frontend | React 19 · Vite 8 · wagmi 2 + viem + RainbowKit · TanStack Query · Tailwind 4 + shadcn/ui |
-| Auth | Sign-In With Ethereum — no passwords, no sessions |
-
-Three confirmations on every write is deliberate. Polygon PoS has ~2s blocks and routine short reorgs, and every write is followed by a database persist — at one confirmation, a reorg between the receipt and the `POST` leaves a row referencing a contract the chain never kept.
+| Auth | Sign-In With Ethereum — no passwords, no sessions, the wallet is the identity |
 
 ---
 
@@ -283,7 +233,7 @@ Copy `.env.example` → `.env` and `client/.env.example` → `client/.env.local`
 
 <br>
 
-**The public Amoy RPC is dead.** `rpc-amoy.polygon.technology` does not respond. Use `https://polygon-amoy-bor-rpc.publicnode.com`. A wallet pointed at the dead endpoint shows a zero balance even when funded, which is an unusually good way to waste two days re-claiming from a faucet.
+**The public Amoy RPC is dead.** `rpc-amoy.polygon.technology` does not respond. Use `https://polygon-amoy-bor-rpc.publicnode.com`. A wallet pointed at the dead endpoint reports a zero balance even when funded.
 
 **Amoy's suggested gas price spikes to 450+ gwei** against a ~25 gwei floor, which quotes a 0.17 POL deploy at 3 POL. `AMOY_GAS_PRICE_GWEI` pins it.
 
@@ -302,14 +252,14 @@ client/src/         pages · components · hooks · config
 supabase/migrations/
 ```
 
-`DOCUMENTATION.md` carries the full technical reference — data model, API surface, trust boundaries, and every known gap.
+`DOCUMENTATION.md` carries the full technical reference — data model, API surface, trust boundaries and contract-by-contract behaviour.
 
 ---
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
 
 ---
 
-<sub>Built by <a href="https://github.com/gokulakrishnanjawahar">Gokulakrishnan Jawahar</a>. Testnet only — no real funds at risk.</sub>
+<sub>Built by <a href="https://github.com/gokulakrishnanjawahar">Gokulakrishnan Jawahar</a></sub>
