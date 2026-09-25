@@ -10,7 +10,7 @@ import {
   Users, Ban,
 } from "lucide-react";
 import PageLayout from "@/components/layout/PageLayout";
-import WalletGuard from "@/components/wallet/WalletGuard";
+import { ConnectButton as RainbowConnectButton } from "@rainbow-me/rainbowkit";
 import StatusBadge from "@/components/shared/StatusBadge";
 import PlatformIcon from "@/components/shared/PlatformIcon";
 import ProgressBar from "@/components/shared/ProgressBar";
@@ -268,6 +268,58 @@ function MilestoneCard({ milestone, index, escrowAddress, isCreator, onProofSubm
 // ─────────────────────────────────────────────
 // APPLY PANEL — creator applies to an open campaign
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// Connect prompt — stands in for ApplyPanel when no wallet is connected
+// ─────────────────────────────────────────────
+// The page itself is public so campaigns can be shared and read by anyone.
+// Applying needs a wallet, so the gate sits here, next to the action it guards,
+// rather than in front of the whole page.
+
+function ConnectToApplyPanel() {
+  return (
+    <div
+      style={{
+        background: SURFACE,
+        border: `1px solid ${BORDER}`,
+        borderRadius: 12,
+        padding: 16,
+      }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 700, color: TEXT, marginBottom: 6 }}>
+        Interested in this campaign?
+      </div>
+      <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.6, marginBottom: 14 }}>
+        Connect a wallet to apply. Your wallet is your identity here — there is
+        no username or password.
+      </p>
+
+      <RainbowConnectButton.Custom>
+        {({ openConnectModal }) => (
+          <motion.button
+            onClick={openConnectModal}
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.99 }}
+            style={{
+              width: "100%",
+              padding: "9px 12px",
+              borderRadius: 8,
+              background: TEXT,
+              color: "#000",
+              border: "none",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            Connect Wallet
+          </motion.button>
+        )}
+      </RainbowConnectButton.Custom>
+    </div>
+  );
+}
+
 function ApplyPanel({ campaignId, connectedAddress, applications }) {
   const [open, setOpen] = useState(false);
   const [pitch, setPitch] = useState("");
@@ -897,9 +949,10 @@ export default function CampaignDetail() {
     );
   }
 
+  // Readable without a wallet — a campaign page is the thing people share.
+  // Every action below is still gated on a connected address.
   return (
-    <WalletGuard>
-      <PageLayout>
+    <PageLayout>
         <div style={{ maxWidth: 1000, margin: "0 auto", padding: "32px 0 80px" }}>
 
           {/* Back button */}
@@ -1126,12 +1179,17 @@ export default function CampaignDetail() {
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 
               {/* Apply — shown to creators on open campaigns */}
-              {campaign.status === "open" && !isBrand && (
+              {campaign.status === "open" && !isBrand && connectedAddress && (
                 <ApplyPanel
                   campaignId={id}
                   connectedAddress={connectedAddress}
                   applications={applications}
                 />
+              )}
+
+              {/* No wallet — invite them to connect rather than hiding the page */}
+              {campaign.status === "open" && !connectedAddress && (
+                <ConnectToApplyPanel />
               )}
 
               {/* Withdraw — brand on open campaigns */}
@@ -1305,7 +1363,6 @@ export default function CampaignDetail() {
             </div>
           </div>
         </div>
-      </PageLayout>
-    </WalletGuard>
+    </PageLayout>
   );
 }

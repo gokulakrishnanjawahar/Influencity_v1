@@ -59,9 +59,26 @@ describe("ReputationToken", async () => {
       assert.equal(await reputationToken.authorisedMinters(escrowMock.address), true);
     });
 
-    it("reverts if non-owner tries to authorise minter", async () => {
+    it("reverts if a non-owner, non-factory tries to authorise minter", async () => {
       await assert.rejects(
         reputationToken.connect(other).authoriseMinter(escrowMock.address),
+        /caller is not owner or factory/
+      );
+    });
+
+    it("allows the registered campaign factory to authorise a minter", async () => {
+      // The factory authorises each escrow it deploys, so it must be able to
+      // call authoriseMinter without being the owner. `other` stands in for
+      // the factory address here.
+      await reputationToken.setCampaignFactory(other.address);
+      await reputationToken.connect(other).authoriseMinter(escrowMock.address);
+
+      assert.equal(await reputationToken.authorisedMinters(escrowMock.address), true);
+    });
+
+    it("reverts if a non-owner tries to set the campaign factory", async () => {
+      await assert.rejects(
+        reputationToken.connect(other).setCampaignFactory(other.address),
         /OwnableUnauthorizedAccount/
       );
     });

@@ -44,6 +44,14 @@ export default {
       url: POLYGON_AMOY_RPC_URL,
       accounts: [PRIVATE_KEY],
       chainId: 80002,
+      // Amoy's suggested gas price spikes hard and erratically — 450+ gwei
+      // observed against a ~25-30 gwei floor. Left unset, Hardhat takes that
+      // suggestion, and a deploy costing 0.2 POL at 30 gwei suddenly needs 3.
+      // Pin it with AMOY_GAS_PRICE_GWEI=30 when the quote looks absurd; the tx
+      // just waits a little longer, which on a testnet costs nothing.
+      ...(process.env.AMOY_GAS_PRICE_GWEI
+        ? { gasPrice: Math.round(Number(process.env.AMOY_GAS_PRICE_GWEI) * 1e9) }
+        : {}),
     },
     polygon: {
       type: "http",

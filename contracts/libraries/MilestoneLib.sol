@@ -61,13 +61,6 @@ library MilestoneLib {
         return block.timestamp > milestone.deadline;
     }
 
-    /// @notice Checks if a milestone is still actionable (pending and not expired)
-    /// @param milestone The milestone to check
-    /// @return true if the milestone can still be fulfilled
-    function isPending(Milestone storage milestone) internal view returns (bool) {
-        return milestone.status == MilestoneStatus.PENDING;
-    }
-
     /// @notice Validates that a milestone's core fields are properly set at creation time
     /// @param threshold The numeric target for the metric
     /// @param trancheAmount The USDC payout for this milestone

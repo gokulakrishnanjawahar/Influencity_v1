@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
-import "../core/CampaignEscrow.sol";
+import "../interfaces/ICampaignEscrow.sol";
 
 /// @title MetricsConsumer
 /// @notice Chainlink Functions client that receives verified metrics
@@ -22,8 +22,13 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
     /// @notice Chainlink subscription ID — pays for Functions requests in LINK
     uint64 public subscriptionId;
 
-    /// @notice Gas limit for the Chainlink Functions callback
-    uint32 public callbackGasLimit = 300_000;
+    /// @notice Gas limit for the Chainlink Functions callback.
+    /// A milestone-met fulfillment measured at ~311k gas: the escrow transfers
+    /// USDC, mints an ERC-1155 and writes several storage slots. The old 300k
+    /// default sat just under that, so a successful verification would have run
+    /// out of gas mid-callback and silently failed to pay. 500k leaves headroom
+    /// for cold slots without over-reserving.
+    uint32 public callbackGasLimit = 500_000;
 
     /// @notice DON ID — identifies which Chainlink Decentralised Oracle Network to use
     bytes32 public donId;
@@ -81,6 +86,16 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
         bytes error
     );
 
+    /// @notice The result came back fine but could not be delivered to the escrow
+    /// — already resolved, campaign finalised, no creator bound, or a malformed
+    /// response. Emitted instead of reverting so the callback always completes.
+    event MetricDeliveryFailed(
+        bytes32 indexed requestId,
+        address indexed escrowAddress,
+        uint256 indexed milestoneIndex,
+        uint256 reportedValue
+    );
+
     event SourceCodeUpdated(uint8 platform);
     event EscrowAuthorised(address indexed escrowAddress);
     event CampaignFactorySet(address indexed factory);
@@ -89,14 +104,6 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
     // ─────────────────────────────────────────────
     // Modifiers
     // ─────────────────────────────────────────────
-
-    modifier onlyAuthorisedEscrow() {
-        require(
-            authorisedEscrows[msg.sender],
-            "MetricsConsumer: caller is not an authorised escrow"
-        );
-        _;
-    }
 
     /// @notice Allows authorised escrows OR the AutomationHandler to request metrics
     modifier onlyAuthorisedCaller() {
@@ -142,15 +149,25 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
     /// Called by an authorised CampaignEscrow (via AutomationHandler).
     /// Each Chainlink node independently calls the platform API and the
     /// network reaches consensus before posting the result on-chain.
+    /// @param escrowAddress  The escrow the verified metric must be delivered to.
+    ///                       Passed explicitly rather than inferred from msg.sender:
+    ///                       requests are placed by the AutomationHandler on an
+    ///                       escrow's behalf, so msg.sender is the handler and
+    ///                       results would be delivered to the wrong contract.
     /// @param milestoneIndex Index of the milestone being verified
     /// @param platform       0=YOUTUBE, 1=TWITCH, 2=LINKEDIN
     /// @param contentId      Platform-specific content identifier (e.g. video ID, clip slug)
     /// @return requestId     Unique ID for tracking the request
     function requestMetric(
+        address escrowAddress,
         uint256 milestoneIndex,
         uint8 platform,
         string memory contentId
     ) external onlyAuthorisedCaller returns (bytes32 requestId) {
+        require(
+            authorisedEscrows[escrowAddress],
+            "MetricsConsumer: escrow not authorised"
+        );
         require(platform <= 2, "MetricsConsumer: invalid platform");
         require(bytes(contentId).length > 0, "MetricsConsumer: contentId required");
 
@@ -177,13 +194,13 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
 
         // Store request context for fulfillment callback
         pendingRequests[requestId] = RequestContext({
-            escrowAddress: msg.sender,
+            escrowAddress: escrowAddress,
             milestoneIndex: milestoneIndex,
             platform: platform,
             fulfilled: false
         });
 
-        emit MetricRequested(requestId, msg.sender, milestoneIndex, platform, contentId);
+        emit MetricRequested(requestId, escrowAddress, milestoneIndex, platform, contentId);
     }
 
     // ─────────────────────────────────────────────
@@ -198,9 +215,15 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
         bytes memory response,
         bytes memory err
     ) internal override {
+        // This function must never revert. A revert here consumes the callback
+        // gas, the DON marks the request failed, and the metric is lost with the
+        // LINK that paid for it. Every failure path below reports and returns.
         RequestContext storage ctx = pendingRequests[requestId];
-        require(ctx.escrowAddress != address(0), "MetricsConsumer: unknown requestId");
-        require(!ctx.fulfilled, "MetricsConsumer: request already fulfilled");
+
+        if (ctx.escrowAddress == address(0) || ctx.fulfilled) {
+            emit MetricDeliveryFailed(requestId, ctx.escrowAddress, ctx.milestoneIndex, 0);
+            return;
+        }
 
         ctx.fulfilled = true;
 
@@ -210,16 +233,32 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
             return;
         }
 
+        // A response that is not exactly one uint256 would revert abi.decode and
+        // take the whole callback down with it.
+        if (response.length != 32) {
+            emit MetricDeliveryFailed(requestId, ctx.escrowAddress, ctx.milestoneIndex, 0);
+            return;
+        }
+
         // Decode the metric value (uint256) returned by the JS script
         uint256 reportedValue = abi.decode(response, (uint256));
 
-        // Forward verified metric to the escrow contract
-        CampaignEscrow(ctx.escrowAddress).receiveVerifiedMetric(
+        // Forward verified metric to the escrow contract. The escrow legitimately
+        // rejects some metrics — milestone already resolved, campaign finalised,
+        // no creator bound — and none of those should fail the callback.
+        try ICampaignEscrow(ctx.escrowAddress).receiveVerifiedMetric(
             ctx.milestoneIndex,
             reportedValue
-        );
-
-        emit MetricFulfilled(requestId, ctx.escrowAddress, ctx.milestoneIndex, reportedValue);
+        ) {
+            emit MetricFulfilled(requestId, ctx.escrowAddress, ctx.milestoneIndex, reportedValue);
+        } catch {
+            emit MetricDeliveryFailed(
+                requestId,
+                ctx.escrowAddress,
+                ctx.milestoneIndex,
+                reportedValue
+            );
+        }
     }
 
     // ─────────────────────────────────────────────

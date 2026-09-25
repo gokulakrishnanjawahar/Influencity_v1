@@ -4,6 +4,8 @@ pragma solidity ^0.8.24;
 import "./CampaignEscrow.sol";
 import "../libraries/MilestoneLib.sol";
 import "../interfaces/IReputationToken.sol";
+import "../interfaces/IMetricsConsumer.sol";
+import "../interfaces/IAutomationHandler.sol";
 
 /// @title CampaignFactory
 /// @notice Deploys a fresh CampaignEscrow for every new deal.
@@ -30,6 +32,11 @@ contract CampaignFactory {
     /// @notice Owner of the factory — can update protocol addresses
     address public owner;
 
+    /// @notice Address of the AutomationHandler that sweeps campaigns for metric
+    /// checks. Optional: while unset, campaigns are still created and can be
+    /// driven by a mock oracle, they are simply not enrolled for automation.
+    address public automationHandler;
+
     /// @notice Registry: campaignId => escrow contract address
     mapping(uint256 => address) public campaignEscrows;
 
@@ -52,6 +59,8 @@ contract CampaignFactory {
         uint256 indexed campaignId,
         address indexed creator
     );
+
+    event AutomationHandlerSet(address indexed handler);
 
     event ProtocolAddressesUpdated(
         address usdc,
@@ -150,6 +159,20 @@ contract CampaignFactory {
         // Authorise this escrow to mint reputation tokens when milestones are met
         IReputationToken(reputationToken).authoriseMinter(escrowAddress);
 
+        // Authorise it to request metric verifications. Without this the oracle
+        // rejects every request the escrow makes, so no milestone can ever be
+        // verified and the campaign silently never pays out.
+        IMetricsConsumer(metricsConsumer).authoriseEscrow(escrowAddress);
+
+        // Enrol it in the automated sweep, when one is configured. Skipped while
+        // unset so local and mock-oracle deployments still work.
+        if (automationHandler != address(0)) {
+            IAutomationHandler(automationHandler).registerCampaign(
+                campaignId,
+                escrowAddress
+            );
+        }
+
         // Add milestones to the escrow
         // Note: deposit() must be called by brand BEFORE addMilestone checks pass,
         // so milestones are added here at zero deposit — deposit called separately after.
@@ -221,6 +244,14 @@ contract CampaignFactory {
     // ─────────────────────────────────────────────
     // Admin Functions
     // ─────────────────────────────────────────────
+
+    /// @notice Sets the AutomationHandler that new campaigns are registered with.
+    /// Existing campaigns are unaffected — they stay with whatever handler was
+    /// configured when they were created.
+    function setAutomationHandler(address _handler) external onlyOwner {
+        automationHandler = _handler;
+        emit AutomationHandlerSet(_handler);
+    }
 
     /// @notice Updates protocol-level addresses — only callable by owner
     /// Useful if MetricsConsumer or ReputationToken is redeployed

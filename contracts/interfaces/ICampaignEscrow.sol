@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import "../libraries/MilestoneLib.sol";
+
 /// @title ICampaignEscrow
 /// @notice Interface for the CampaignEscrow contract — the subset of functions
 /// other protocol contracts (oracle, automation) interact with.
@@ -19,6 +21,12 @@ interface ICampaignEscrow {
 
     /// @notice Returns the number of milestones in the campaign
     function getMilestoneCount() external view returns (uint256);
+
+    /// @notice Returns a single milestone by index
+    function getMilestone(uint256 index) external view returns (MilestoneLib.Milestone memory);
+
+    /// @notice Whether the campaign has been settled and can no longer pay out
+    function isFinalized() external view returns (bool);
 
     /// @notice The brand that funded the campaign
     function brand() external view returns (address);

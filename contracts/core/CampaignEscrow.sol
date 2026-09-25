@@ -55,16 +55,22 @@ contract CampaignEscrow is ReentrancyGuard, Ownable {
     /// @notice Array of all milestones for this campaign
     MilestoneLib.Milestone[] public milestones;
 
+    /// @notice Upper bound on milestones per campaign. finalizeCampaign() and the
+    /// Chainlink automation sweep both iterate this array, so it must stay small
+    /// enough that neither can be pushed past the block gas limit.
+    uint256 public constant MAX_MILESTONES = 20;
+
     // ─────────────────────────────────────────────
     // Events
     // ─────────────────────────────────────────────
 
-    event CampaignInitialised(
+    /// @notice Emitted when the brand locks USDC into the escrow. Deposits were
+    /// previously silent on-chain, leaving event listeners unable to observe
+    /// funding. (Replaces CampaignInitialised, which described the old flow
+    /// where a creator existed at construction, and was never emitted.)
+    event CampaignFunded(
         uint256 indexed campaignId,
-        address indexed brand,
-        address indexed creator,
-        uint256 totalDeposit,
-        string ipfsBriefHash
+        uint256 amount
     );
 
     event MilestoneAdded(
@@ -192,6 +198,7 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
         require(success, "CampaignEscrow: USDC transfer failed");
 
         totalDeposit = amount;
+        emit CampaignFunded(campaignId, amount);
     }
 
     /// @notice Add a milestone to this campaign. Called by CampaignFactory during setup.
@@ -204,6 +211,10 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
         uint256 _deadline,
         string memory _contentId
     ) external onlyOwner notFinalized {
+        require(
+            milestones.length < MAX_MILESTONES,
+            "CampaignEscrow: too many milestones"
+        );
         require(
             MilestoneLib.isValidMilestone(_threshold, _trancheAmount, _deadline),
             "CampaignEscrow: invalid milestone parameters"
@@ -248,6 +259,10 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
         require(creator == address(0), "CampaignEscrow: creator already assigned");
         require(_creator != address(0), "CampaignEscrow: invalid creator address");
         require(_creator != brand, "CampaignEscrow: brand and creator cannot be same");
+        // Binding a creator to an empty escrow forms an agreement that can never
+        // pay out: every _releaseTranche would revert on the USDC transfer, which
+        // in turn reverts the oracle callback that triggered it.
+        require(totalDeposit > 0, "CampaignEscrow: campaign not funded");
 
         creator = _creator;
         emit CreatorAssigned(campaignId, _creator);
@@ -262,6 +277,10 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
             "CampaignEscrow: milestone not pending"
         );
         require(bytes(_ipfsProofHash).length > 0, "CampaignEscrow: proof hash required");
+        require(
+            !MilestoneLib.isExpired(milestones[milestoneIndex]),
+            "CampaignEscrow: milestone deadline passed"
+        );
 
         milestones[milestoneIndex].ipfsProofHash = _ipfsProofHash;
     }
@@ -358,13 +377,21 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
             "CampaignEscrow: not authorized to finalize"
         );
 
-        // Fail any milestones that are still pending but expired
+        // Settle every outstanding milestone first. A pending milestone past its
+        // deadline is failed and refunded here; one that is still live blocks
+        // finalization outright.
+        //
+        // Without that block the sweep below would hand the brand every
+        // unresolved tranche on demand — including one the creator has already
+        // earned but the oracle has not yet reported on — which would make the
+        // escrow's core guarantee (a met milestone always pays) unenforceable.
         for (uint256 i = 0; i < milestones.length; i++) {
             MilestoneLib.Milestone storage milestone = milestones[i];
-            if (
-                milestone.status == MilestoneLib.MilestoneStatus.PENDING &&
-                MilestoneLib.isExpired(milestone)
-            ) {
+            if (milestone.status == MilestoneLib.MilestoneStatus.PENDING) {
+                require(
+                    MilestoneLib.isExpired(milestone),
+                    "CampaignEscrow: milestone still live"
+                );
                 _failMilestone(i);
             }
         }

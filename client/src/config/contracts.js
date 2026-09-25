@@ -311,6 +311,15 @@ export const REPUTATION_TOKEN_ABI = [
     ],
   },
   {
+    // MockUSDC only — a permissionless mint so any test wallet can fund itself.
+    // Absent from real USDC, which is why TestnetFaucet is testnet-gated.
+    name: "faucet",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "amount", type: "uint256" }],
+    outputs: [],
+  },
+  {
     name: "balanceOf",
     type: "function",
     stateMutability: "view",

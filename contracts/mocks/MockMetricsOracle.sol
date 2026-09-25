@@ -108,6 +108,12 @@ contract MockMetricsOracle {
     // Admin
     // ─────────────────────────────────────────────
 
+    /// @notice No-op stand-in for MetricsConsumer.authoriseEscrow so that
+    /// CampaignFactory can wire every escrow the same way regardless of whether
+    /// the real Chainlink consumer or this mock is deployed. The mock has no
+    /// per-escrow permissions — submitMetric is gated on the caller instead.
+    function authoriseEscrow(address) external {}
+
     /// @notice Adds an authorised caller (e.g. a test contract or script wallet)
     function addAuthorisedCaller(address caller) external onlyOwner {
         authorisedCallers[caller] = true;

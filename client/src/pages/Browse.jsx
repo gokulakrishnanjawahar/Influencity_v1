@@ -11,7 +11,6 @@ import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { ArrowRight, Layers, Coins, Compass } from "lucide-react";
 import PageLayout, { Section } from "@/components/layout/PageLayout";
-import RoleGuard from "@/components/wallet/RoleGuard";
 import PlatformIcon from "@/components/shared/PlatformIcon";
 import LoadingSpinner from "@/components/shared/LoadingSpinner";
 import EmptyState from "@/components/shared/EmptyState";
@@ -173,9 +172,12 @@ function OpenCampaignCard({ campaign, index }) {
 export default function Browse() {
   const { data: campaigns = [], isLoading } = useOpenCampaigns();
 
+  // Deliberately ungated. The marketplace is the shop window: it reads the
+  // public /campaigns/open endpoint and needs no wallet, so requiring one meant
+  // anyone without MetaMask saw an empty site. Applying still requires a wallet
+  // — that gate lives on the campaign detail page, next to the action.
   return (
-    <RoleGuard role="creator">
-      <PageLayout>
+    <PageLayout>
         <Section>
           <div style={{ marginBottom: 28 }}>
             <h1
@@ -216,7 +218,6 @@ export default function Browse() {
             </div>
           )}
         </Section>
-      </PageLayout>
-    </RoleGuard>
+    </PageLayout>
   );
 }

@@ -1,7 +1,7 @@
 {
   "name": "influencity_v1",
   "version": "1.0.0",
-  "description": "",
+  "description": "Web3 influencer-marketing escrow with oracle-verified milestone payouts on Polygon",
   "main": "index.js",
   "directories": {
     "test": "test"
@@ -10,11 +10,14 @@
     "test": "npx hardhat test",
     "test:escrow": "npx hardhat test test/CampaignEscrow.test.js",
     "test:factory": "npx hardhat test test/CampaignFactory.test.js",
-    "test:reputation": "npx hardhat test test/ReputationToken.test.js"
+    "test:reputation": "npx hardhat test test/ReputationToken.test.js",
+    "export:abis": "node scripts/exportAbis.js",
+    "build:abis": "npx hardhat compile && node scripts/exportAbis.js",
+    "deploy:oracle": "npx hardhat run scripts/deployOracle.js --network polygonAmoy"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "devDependencies": {
     "@chainlink/contracts": "^1.5.0",
     "@chainlink/functions-toolkit": "^0.3.2",

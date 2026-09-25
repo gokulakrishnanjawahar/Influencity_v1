@@ -21,6 +21,7 @@ import { useCampaigns, useMyApplications } from "@/hooks/useCampaign";
 import { useReputation } from "@/hooks/useReputation";
 import { useSIWE } from "@/components/wallet/SIWEProvider";
 import { truncateAddress, formatUSDC, formatDeadline } from "@/lib/utils";
+import TestnetFaucet from "@/components/shared/TestnetFaucet";
 import { cn } from "@/lib/utils";
 
 // ─────────────────────────────────────────────
@@ -322,6 +323,10 @@ export default function Dashboard() {
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {/* Testnet faucet — only the deploy wallet is minted any USDC,
+                  so every other wallet needs a way to fund itself. */}
+              <TestnetFaucet />
+
               {/* Role toggle */}
               <div style={{
                 display: "flex", background: SURFACE2,

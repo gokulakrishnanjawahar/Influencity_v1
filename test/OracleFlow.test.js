@@ -6,12 +6,13 @@ import hre from "hardhat";
 // End-to-End Oracle Flow Test
 // ─────────────────────────────────────────────
 // Simulates the complete Influencity protocol flow:
-// 1. Brand creates campaign via Factory
-// 2. Brand deposits USDC into escrow
-// 3. Creator submits content proof
-// 4. Oracle (simulated) verifies metric
-// 5. Tranche released to creator + reputation token minted
-// 6. Failed milestone refunds brand
+// 1. Brand creates an open campaign listing via the Factory
+// 2. Brand deposits USDC into the escrow
+// 3. Brand selects a creator — the agreement is formed on-chain
+// 4. Creator submits content proof
+// 5. Oracle (simulated) verifies the metric
+// 6. Tranche released to creator + reputation token minted
+// 7. Failed milestone refunds the brand
 // ─────────────────────────────────────────────
 
 describe("End-to-End Oracle Flow", async () => {
@@ -33,7 +34,13 @@ describe("End-to-End Oracle Flow", async () => {
   const VIDEO_ID = "dQw4w9WgXcQ";
 
   const USDC = (amount) => BigInt(amount) * 1_000_000n;
-  const futureDeadline = (s = 86400) => Math.floor(Date.now() / 1000) + s;
+
+  // Chain-relative so repeated advanceTime() calls across the suite can't push
+  // wall-clock deadlines into the past.
+  async function futureDeadline(secondsFromNow = 86400) {
+    const block = await ethers.provider.getBlock("latest");
+    return block.timestamp + secondsFromNow;
+  }
 
   async function advanceTime(seconds) {
     await ethers.provider.send("evm_increaseTime", [seconds]);
@@ -65,8 +72,45 @@ describe("End-to-End Oracle Flow", async () => {
       await mockOracle.getAddress()
     );
 
+    // Lets the factory authorise each escrow it deploys as a reputation minter.
+    // Mirrors step 5 of scripts/deploy.js.
+    await reputationToken.setCampaignFactory(await factory.getAddress());
+
     // Fund brand with USDC
     await usdc.connect(brand).faucet(USDC(1000));
+  }
+
+  // Runs the full setup: create listing → fund → bind creator.
+  // Returns the escrow contract instance.
+  async function openFundedCampaign({ thresholds, tranches, deadlines }) {
+    const count = thresholds.length;
+    const tx = await factory.connect(brand).createCampaign(
+      IPFS_BRIEF,
+      Array(count).fill(PLATFORM_YOUTUBE),
+      Array(count).fill(METRIC_VIEWS),
+      thresholds,
+      tranches,
+      deadlines,
+      Array(count).fill(VIDEO_ID)
+    );
+
+    const receipt = await tx.wait();
+    const event = receipt.logs.find(
+      (log) => log.fragment?.name === "CampaignCreated"
+    );
+    const escrowAddress = event.args.escrowAddress;
+    const campaignId = event.args.campaignId;
+    const escrow = await ethers.getContractAt("CampaignEscrow", escrowAddress);
+
+    // Brand funds the escrow
+    const total = tranches.reduce((a, b) => a + b, 0n);
+    await usdc.connect(brand).approve(escrowAddress, total);
+    await escrow.connect(brand).deposit(total);
+
+    // Brand selects the creator — this is what forms the agreement
+    await factory.connect(brand).assignCreator(campaignId, creator.address);
+
+    return escrow;
   }
 
   // ─────────────────────────────────────────────
@@ -78,57 +122,41 @@ describe("End-to-End Oracle Flow", async () => {
 
     beforeEach(async () => {
       await deployAll();
-
-      // 1. Brand creates campaign with one milestone
-      const tx = await factory.connect(brand).createCampaign(
-        creator.address,
-        IPFS_BRIEF,
-        [PLATFORM_YOUTUBE],
-        [METRIC_VIEWS],
-        [THRESHOLD_50K],
-        [USDC(500)],
-        [futureDeadline()],
-        [VIDEO_ID]
-      );
-
-      const receipt = await tx.wait();
-      const event = receipt.logs.find(
-        (log) => log.fragment?.name === "CampaignCreated"
-      );
-      const escrowAddress = event.args.escrowAddress;
-      escrow = await ethers.getContractAt("CampaignEscrow", escrowAddress);
-
-      // Authorise escrow to mint reputation tokens
-      await reputationToken.authoriseMinter(escrowAddress);
-
-      // 2. Brand deposits USDC
-      await usdc.connect(brand).approve(escrowAddress, USDC(500));
-      await escrow.connect(brand).deposit(USDC(500));
+      escrow = await openFundedCampaign({
+        thresholds: [THRESHOLD_50K],
+        tranches: [USDC(500)],
+        deadlines: [await futureDeadline()],
+      });
     });
 
-    it("full flow: create → deposit → proof → oracle → release", async () => {
-      // 3. Creator submits content proof
+    it("authorises the escrow as a reputation minter at creation", async () => {
+      assert.equal(
+        await reputationToken.authorisedMinters(await escrow.getAddress()),
+        true
+      );
+    });
+
+    it("full flow: create → deposit → assign → proof → oracle → release", async () => {
+      // Creator submits content proof
       await escrow.connect(creator).submitProof(0, IPFS_PROOF);
 
       const milestone = await escrow.getMilestone(0);
       assert.equal(milestone.ipfsProofHash, IPFS_PROOF);
 
-      // 4. Record balances before oracle verification
+      // Record balances before oracle verification
       const creatorBalanceBefore = await usdc.balanceOf(creator.address);
-      const escrowBalanceBefore = await usdc.balanceOf(await escrow.getAddress());
 
-      // 5. Oracle verifies metric — 75k views beats 50k threshold
+      // Oracle verifies metric — 75k views beats 50k threshold
       await mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000);
 
-      // 6. Verify tranche released to creator
+      // Verify tranche released to creator
       const creatorBalanceAfter = await usdc.balanceOf(creator.address);
       assert.equal(creatorBalanceAfter - creatorBalanceBefore, USDC(500));
 
-      // 7. Verify escrow is now empty
-      const escrowBalanceAfter = await usdc.balanceOf(await escrow.getAddress());
-      assert.equal(escrowBalanceAfter, 0n);
+      // Verify escrow is now empty
+      assert.equal(await usdc.balanceOf(await escrow.getAddress()), 0n);
 
-      // 8. Verify milestone marked as MET
+      // Verify milestone marked as MET
       const updatedMilestone = await escrow.getMilestone(0);
       assert.equal(updatedMilestone.status, 1n); // MET
     });
@@ -181,6 +209,62 @@ describe("End-to-End Oracle Flow", async () => {
   });
 
   // ─────────────────────────────────────────────
+  // Open Listing — Before A Creator Is Selected
+  // ─────────────────────────────────────────────
+
+  describe("Open Listing", async () => {
+    let escrow;
+    let campaignId;
+
+    beforeEach(async () => {
+      await deployAll();
+
+      const tx = await factory.connect(brand).createCampaign(
+        IPFS_BRIEF,
+        [PLATFORM_YOUTUBE],
+        [METRIC_VIEWS],
+        [THRESHOLD_50K],
+        [USDC(500)],
+        [await futureDeadline()],
+        [VIDEO_ID]
+      );
+      const receipt = await tx.wait();
+      const event = receipt.logs.find(
+        (log) => log.fragment?.name === "CampaignCreated"
+      );
+      campaignId = event.args.campaignId;
+      escrow = await ethers.getContractAt("CampaignEscrow", event.args.escrowAddress);
+
+      await usdc.connect(brand).approve(event.args.escrowAddress, USDC(500));
+      await escrow.connect(brand).deposit(USDC(500));
+    });
+
+    it("rejects oracle metrics until a creator is bound", async () => {
+      await assert.rejects(
+        mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000),
+        /no creator assigned/
+      );
+    });
+
+    it("lets the brand withdraw the listing and recover the full deposit", async () => {
+      const before = await usdc.balanceOf(brand.address);
+      await escrow.connect(brand).cancelCampaign();
+      const after = await usdc.balanceOf(brand.address);
+
+      assert.equal(after - before, USDC(500));
+      assert.equal(await escrow.isCancelled(), true);
+    });
+
+    it("closes the listing to future assignment once cancelled", async () => {
+      await escrow.connect(brand).cancelCampaign();
+      await assert.rejects(
+        factory.connect(brand).assignCreator(campaignId, creator.address),
+        /campaign already finalized/
+      );
+    });
+  });
+
+  // ─────────────────────────────────────────────
   // Multi-Milestone Campaign
   // ─────────────────────────────────────────────
 
@@ -189,29 +273,12 @@ describe("End-to-End Oracle Flow", async () => {
 
     beforeEach(async () => {
       await deployAll();
-
-      // Campaign with 3 milestones at different thresholds
-      const tx = await factory.connect(brand).createCampaign(
-        creator.address,
-        IPFS_BRIEF,
-        [PLATFORM_YOUTUBE, PLATFORM_YOUTUBE, PLATFORM_YOUTUBE],
-        [METRIC_VIEWS, METRIC_VIEWS, METRIC_VIEWS],
-        [THRESHOLD_50K, THRESHOLD_100K, 200_000],
-        [USDC(100), USDC(200), USDC(300)],
-        [futureDeadline(), futureDeadline(), futureDeadline()],
-        [VIDEO_ID, VIDEO_ID, VIDEO_ID]
-      );
-
-      const receipt = await tx.wait();
-      const event = receipt.logs.find(
-        (log) => log.fragment?.name === "CampaignCreated"
-      );
-      const escrowAddress = event.args.escrowAddress;
-      escrow = await ethers.getContractAt("CampaignEscrow", escrowAddress);
-
-      await reputationToken.authoriseMinter(escrowAddress);
-      await usdc.connect(brand).approve(escrowAddress, USDC(600));
-      await escrow.connect(brand).deposit(USDC(600));
+      const deadline = await futureDeadline();
+      escrow = await openFundedCampaign({
+        thresholds: [THRESHOLD_50K, THRESHOLD_100K, 200_000],
+        tranches: [USDC(100), USDC(200), USDC(300)],
+        deadlines: [deadline, deadline, deadline],
+      });
     });
 
     it("releases tranches independently per milestone", async () => {
@@ -268,28 +335,11 @@ describe("End-to-End Oracle Flow", async () => {
 
     beforeEach(async () => {
       await deployAll();
-
-      const tx = await factory.connect(brand).createCampaign(
-        creator.address,
-        IPFS_BRIEF,
-        [PLATFORM_YOUTUBE],
-        [METRIC_VIEWS],
-        [THRESHOLD_50K],
-        [USDC(500)],
-        [futureDeadline(60)], // 60 second deadline
-        [VIDEO_ID]
-      );
-
-      const receipt = await tx.wait();
-      const event = receipt.logs.find(
-        (log) => log.fragment?.name === "CampaignCreated"
-      );
-      const escrowAddress = event.args.escrowAddress;
-      escrow = await ethers.getContractAt("CampaignEscrow", escrowAddress);
-
-      await reputationToken.authoriseMinter(escrowAddress);
-      await usdc.connect(brand).approve(escrowAddress, USDC(500));
-      await escrow.connect(brand).deposit(USDC(500));
+      escrow = await openFundedCampaign({
+        thresholds: [THRESHOLD_50K],
+        tranches: [USDC(500)],
+        deadlines: [await futureDeadline(60)], // 60 second deadline
+      });
     });
 
     it("refunds brand when deadline passes and metric not met", async () => {
@@ -326,29 +376,13 @@ describe("End-to-End Oracle Flow", async () => {
 
     beforeEach(async () => {
       await deployAll();
-
+      const deadline = await futureDeadline(60);
       // 2 milestones — one will be met, one will fail
-      const tx = await factory.connect(brand).createCampaign(
-        creator.address,
-        IPFS_BRIEF,
-        [PLATFORM_YOUTUBE, PLATFORM_YOUTUBE],
-        [METRIC_VIEWS, METRIC_VIEWS],
-        [THRESHOLD_50K, THRESHOLD_100K],
-        [USDC(200), USDC(200)],
-        [futureDeadline(60), futureDeadline(60)],
-        [VIDEO_ID, VIDEO_ID]
-      );
-
-      const receipt = await tx.wait();
-      const event = receipt.logs.find(
-        (log) => log.fragment?.name === "CampaignCreated"
-      );
-      const escrowAddress = event.args.escrowAddress;
-      escrow = await ethers.getContractAt("CampaignEscrow", escrowAddress);
-
-      await reputationToken.authoriseMinter(escrowAddress);
-      await usdc.connect(brand).approve(escrowAddress, USDC(400));
-      await escrow.connect(brand).deposit(USDC(400));
+      escrow = await openFundedCampaign({
+        thresholds: [THRESHOLD_50K, THRESHOLD_100K],
+        tranches: [USDC(200), USDC(200)],
+        deadlines: [deadline, deadline],
+      });
     });
 
     it("correctly settles mixed met/failed milestones on finalization", async () => {

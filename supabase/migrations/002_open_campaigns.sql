@@ -52,6 +52,7 @@ create index if not exists idx_applications_creator  on campaign_applications(cr
 create index if not exists idx_applications_status   on campaign_applications(status);
 
 -- Keep updated_at fresh on every row update
+drop trigger if exists update_applications_updated_at on campaign_applications;
 create trigger update_applications_updated_at
   before update on campaign_applications
   for each row execute function update_updated_at();
@@ -64,6 +65,7 @@ create trigger update_applications_updated_at
 
 alter table campaign_applications enable row level security;
 
+drop policy if exists "Applications are publicly readable" on campaign_applications;
 create policy "Applications are publicly readable"
   on campaign_applications for select
   using (true);
