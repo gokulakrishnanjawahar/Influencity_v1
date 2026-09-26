@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────
 
 import express from "express";
+import { ethers } from "ethers";
 import {
   getCampaignByContract,
   updateMilestoneStatus,
@@ -162,11 +163,18 @@ async function handleMilestoneMet(data) {
   );
 
   if (milestone) {
+    // Mirror ReputationToken._deriveTokenId: uint256(keccak256(abi.encodePacked(campaignId, milestoneIndex)))
+    const tokenIdHex = ethers.solidityPackedKeccak256(
+      ["uint256", "uint256"],
+      [campaignIdOnchain, milestoneIndex]
+    );
+    const tokenId = BigInt(tokenIdHex).toString();
+
     await createReputationEvent({
       creatorAddress: campaign.creator_address,
       campaignId: campaign.id,
       milestoneId: milestone.id,
-      tokenId: `${campaignIdOnchain}_${milestoneIndex}`,
+      tokenId,
       txHash,
     });
   }

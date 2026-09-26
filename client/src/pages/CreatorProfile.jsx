@@ -15,6 +15,7 @@ import { useReputation, useReputationEvents } from "@/hooks/useReputation";
 import { useCampaigns } from "@/hooks/useCampaign";
 import { formatUSDC, truncateAddress } from "@/lib/utils";
 import { PLATFORMS, METRIC_TYPES } from "@/lib/constants";
+import { explorerAddressUrl, EXPLORER_NAME } from "@/config/wagmi";
 import { toast } from "sonner";
 
 // ─────────────────────────────────────────────
@@ -337,13 +338,13 @@ export default function CreatorProfile() {
                 </button>
 
                 <a
-                  href={`https://sepolia.basescan.org/address/${profileAddress}`}
+                  href={explorerAddressUrl(profileAddress)}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ display: "flex", alignItems: "center", gap: 4, color: VERY_MUTED, fontSize: 11, textDecoration: "none" }}
                 >
                   <ExternalLink size={10} />
-                  Basescan
+                  {EXPLORER_NAME}
                 </a>
               </div>
             </div>
@@ -354,7 +355,7 @@ export default function CreatorProfile() {
                 Reputation Score
               </p>
               <div style={{ display: "flex", alignItems: "baseline", gap: 6, justifyContent: "flex-end" }}>
-                <span style={{ fontSize: 40, fontWeight: 900, color: TEXT, fontFamily: "monospace", letterSpacing: -2 }}>
+                <span style={{ fontSize: "clamp(28px, 3.33vw, 40px)", fontWeight: 900, color: TEXT, fontFamily: "monospace", letterSpacing: -2 }}>
                   {score}
                 </span>
                 <div style={{ width: 8, height: 8, borderRadius: "50%", background: score > 0 ? SUCCESS : VERY_MUTED }} />
@@ -365,7 +366,7 @@ export default function CreatorProfile() {
         </motion.div>
 
         {/* Stats */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 24 }}>
+        <div className="r-grid-4" style={{ gap: 10, marginBottom: 24 }}>
           <StatCard label="Reputation tokens" value={badges.length} sub="minted on-chain" icon={Award} delay={0} />
           <StatCard label="Completed campaigns" value={completedCampaigns} sub={`${activeCampaigns} active`} icon={CheckCircle} delay={0.06} />
           <StatCard label="Total earned" value={`$${formatUSDC(totalEarned)}`} sub="USDC received" icon={TrendingUp} delay={0.12} />
@@ -429,7 +430,7 @@ export default function CreatorProfile() {
                   </div>
 
                   {/* Badge grid */}
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+                  <div className="r-grid-3" style={{ gap: 12 }}>
                     {badges.map((record, i) => (
                       <ReputationBadge
                         key={record.tokenId || record.token_id || i}

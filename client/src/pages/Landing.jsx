@@ -114,7 +114,7 @@ function LogoIntro({ onComplete }) {
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: phase >= 1 ? 1 : 0, y: phase >= 1 ? 0 : 8 }}
           transition={{ delay: 0.5, duration: 0.5 }}
-          style={{ fontSize: 28, fontWeight: 900, color: WHITE, letterSpacing: -1 }}
+          style={{ fontSize: "clamp(24px, 2.33vw, 28px)", fontWeight: 900, color: WHITE, letterSpacing: -1 }}
         >
           Influencity
         </motion.span>
@@ -539,7 +539,7 @@ function OracleLoop() {
       </div>
 
       {/* Nodes */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 16 }}>
+      <div className="r-grid-5" style={{ gap: 6, marginBottom: 16 }}>
         {nodes.map((node, i) => (
           <motion.div
             key={node}
@@ -575,7 +575,7 @@ function OracleLoop() {
         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
           <motion.span
             animate={{ color: phase >= 3 ? WHITE : MUTED }}
-            style={{ fontSize: 28, fontWeight: 900, fontFamily: "monospace", letterSpacing: -1 }}
+            style={{ fontSize: "clamp(24px, 2.33vw, 28px)", fontWeight: 900, fontFamily: "monospace", letterSpacing: -1 }}
           >
             52,341
           </motion.span>
@@ -678,9 +678,13 @@ function HorizontalScroll({ children }) {
   const x = useTransform(scrollYProgress, [0, 1], ["0%", "-62%"]);
 
   return (
-    <div ref={ref} style={{ height: "280vh", position: "relative" }}>
-      <div style={{ position: "sticky", top: 0, overflow: "hidden", height: "100vh", display: "flex", alignItems: "center" }}>
-        <motion.div style={{ x, display: "flex", gap: "1.5rem", paddingLeft: "8vw", paddingRight: "4vw" }}>
+    // Below 900px the scroll-jack is disabled in CSS and this becomes a plain
+    // swipeable row. The -62% transform is calibrated against the track width,
+    // so on a narrow viewport it would stop short and leave the last cards
+    // unreachable — and 280vh of hijacked scrolling is hostile on a phone.
+    <div ref={ref} className="r-hscroll" style={{ height: "280vh", position: "relative" }}>
+      <div className="r-hscroll-sticky" style={{ position: "sticky", top: 0, overflow: "hidden", height: "100vh", display: "flex", alignItems: "center" }}>
+        <motion.div className="r-hscroll-track" style={{ x, display: "flex", gap: "1.5rem", paddingLeft: "8vw", paddingRight: "4vw" }}>
           {children}
         </motion.div>
       </div>
@@ -697,7 +701,7 @@ function TerminalLog() {
   const [lines, setLines] = useState([]);
 
   const LOG = [
-    { text: "$ influencity deploy --network base-sepolia", color: VERY_MUTED },
+    { text: "$ influencity deploy --network polygon-amoy", color: VERY_MUTED },
     { text: "  Compiling contracts...", color: VERY_MUTED },
     { text: "  ✓ CampaignFactory deployed → 0xA3f7...8B2c", color: MUTED },
     { text: "  ✓ ReputationToken deployed → 0xF2c1...4A9d", color: MUTED },
@@ -934,7 +938,7 @@ export default function Landing() {
         <motion.div
           style={{ y: smoothY, opacity: heroOpacity, position: "relative", zIndex: 1, width: "100%", maxWidth: 1200, margin: "0 auto", padding: "100px 24px 60px" }}
         >
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 64, alignItems: "center" }}>
+          <div className="r-grid-hero">
 
             {/* Left */}
             <motion.div
@@ -960,7 +964,7 @@ export default function Landing() {
                   animate={{ opacity: [1, 0.3, 1] }}
                   transition={{ duration: 1.5, repeat: Infinity }}
                 />
-                <span style={{ fontSize: 11, color: MUTED }}>Live on Base Sepolia · Chainlink · IPFS</span>
+                <span style={{ fontSize: 11, color: MUTED }}>Live on Polygon Amoy · Chainlink · IPFS</span>
               </motion.div>
 
               {/* Headline */}
@@ -972,7 +976,7 @@ export default function Landing() {
                       animate={{ y: introComplete ? "0%" : "100%" }}
                       transition={{ duration: 0.7, delay: 0.35 + i * 0.1, ease: [0.22, 1, 0.36, 1] }}
                       style={{
-                        fontSize: 72, fontWeight: 900, lineHeight: 1,
+                        fontSize: "clamp(39px, 6vw, 72px)", fontWeight: 900, lineHeight: 1,
                         letterSpacing: -3, color: i === 1 ? WHITE : TEXT,
                         opacity: i === 2 ? 0.4 : 1,
                       }}
@@ -1116,13 +1120,13 @@ export default function Landing() {
         <Marquee items={[
           "Smart Contract Escrow", "Chainlink Oracle Verification", "IPFS Content Proofs",
           "Soulbound Reputation Tokens", "Zero Platform Fees", "Automatic Payouts",
-          "YouTube · Twitch · LinkedIn", "Non-Custodial", "Base L2", "Filecoin Storage",
+          "YouTube · Twitch · LinkedIn", "Non-Custodial", "Polygon PoS", "Filecoin Storage",
         ]} speed={38} />
       </div>
 
       {/* ══ STATS ══ */}
       <section style={{ maxWidth: 1200, margin: "0 auto", padding: "80px 24px" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, background: BORDER, borderRadius: 14, overflow: "hidden" }}>
+        <div className="r-grid-4" style={{ gap: 1, background: BORDER, borderRadius: 14, overflow: "hidden" }}>
           {[
             { to: 0, suffix: "%", label: "Platform fee", desc: "We take nothing" },
             { to: 100, suffix: "%", label: "On-chain verified", desc: "Real API metrics" },
@@ -1134,7 +1138,7 @@ export default function Landing() {
               whileHover={{ background: SURFACE2 }}
               style={{ padding: "40px 28px", background: BG, textAlign: "center", cursor: "default" }}
             >
-              <div style={{ fontSize: 44, fontWeight: 900, color: WHITE, letterSpacing: -2, fontFamily: "monospace", marginBottom: 6 }}>
+              <div style={{ fontSize: "clamp(30px, 3.67vw, 44px)", fontWeight: 900, color: WHITE, letterSpacing: -2, fontFamily: "monospace", marginBottom: 6 }}>
                 <Counter to={to} prefix={prefix} suffix={suffix} />
               </div>
               <div style={{ fontSize: 13, color: TEXT, fontWeight: 600, marginBottom: 4 }}>{label}</div>
@@ -1146,15 +1150,15 @@ export default function Landing() {
 
       {/* ══ HOW IT WORKS ══ */}
       <section id="how-it-works" style={{ padding: "60px 24px 80px", borderTop: `1px solid ${BORDER}` }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 80, alignItems: "start" }}>
+        <div className="r-grid-narrative" style={{ maxWidth: 1200, margin: "0 auto" }}>
 
           {/* Left sticky */}
-          <div style={{ position: "sticky", top: 100 }}>
+          <div className="r-unstick" style={{ position: "sticky", top: 100 }}>
             <Reveal>
               <p style={{ fontSize: 10, color: VERY_MUTED, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", marginBottom: 16 }}>
                 How it works
               </p>
-              <h2 style={{ fontSize: 44, fontWeight: 900, color: TEXT, letterSpacing: -2, lineHeight: 1.05, marginBottom: 20 }}>
+              <h2 style={{ fontSize: "clamp(30px, 3.67vw, 44px)", fontWeight: 900, color: TEXT, letterSpacing: -2, lineHeight: 1.05, marginBottom: 20 }}>
                 Deal to payout.<br />
                 <span style={{ color: VERY_MUTED }}>Entirely on-chain.</span>
               </h2>
@@ -1189,7 +1193,7 @@ export default function Landing() {
             <p style={{ fontSize: 10, color: VERY_MUTED, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", marginBottom: 12 }}>
               On-chain audit trail
             </p>
-            <p style={{ fontSize: 32, fontWeight: 900, color: TEXT, letterSpacing: -1.5, marginBottom: 6 }}>
+            <p style={{ fontSize: "clamp(25px, 2.67vw, 32px)", fontWeight: 900, color: TEXT, letterSpacing: -1.5, marginBottom: 6 }}>
               Every action. Permanently recorded.
             </p>
             <p style={{ fontSize: 13, color: VERY_MUTED, marginBottom: 32 }}>Scroll to explore →</p>
@@ -1303,19 +1307,19 @@ export default function Landing() {
               <p style={{ fontSize: 10, color: VERY_MUTED, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", marginBottom: 12 }}>
                 Built different
               </p>
-              <h2 style={{ fontSize: 40, fontWeight: 900, color: TEXT, letterSpacing: -1.5, lineHeight: 1.05 }}>
+              <h2 style={{ fontSize: "clamp(28px, 3.33vw, 40px)", fontWeight: 900, color: TEXT, letterSpacing: -1.5, lineHeight: 1.05 }}>
                 Everything the industry<br />refused to build
               </h2>
             </Reveal>
           </div>
           <Reveal direction="left">
-            <p style={{ fontSize: 13, color: MUTED, maxWidth: 260, lineHeight: 1.7, textAlign: "right" }}>
+            <p className="r-align-reset" style={{ fontSize: 13, color: MUTED, maxWidth: 260, lineHeight: 1.7, textAlign: "right" }}>
               Six primitives that make trustless influencer campaigns possible for the first time.
             </p>
           </Reveal>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+        <div className="r-grid-3" style={{ gap: 12 }}>
           <FeatureCard icon={Lock} title="Isolated escrow per campaign" desc="Each campaign deploys its own CampaignEscrow contract. A bug or dispute in one campaign is completely isolated from all others." delay={0} />
           <FeatureCard icon={BarChart3} title="Oracle-verified metrics" desc="Chainlink nodes independently fetch real YouTube, Twitch, and LinkedIn API data. Not self-reported. Not fakeable." delay={0.06} />
           <FeatureCard icon={Star} title="Soulbound reputation tokens" desc="Every milestone mints a non-transferable ERC-1155 token to the creator wallet. Impossible to fake. Permanent track record." delay={0.12} />
@@ -1327,13 +1331,13 @@ export default function Landing() {
 
       {/* ══ TERMINAL ══ */}
       <section style={{ padding: "60px 24px 80px", maxWidth: 1200, margin: "0 auto", borderTop: `1px solid ${BORDER}` }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 64, alignItems: "center" }}>
+        <div className="r-grid-hero">
           <div>
             <Reveal>
               <p style={{ fontSize: 10, color: VERY_MUTED, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", marginBottom: 16 }}>
                 Developer first
               </p>
-              <h2 style={{ fontSize: 40, fontWeight: 900, color: TEXT, letterSpacing: -1.5, lineHeight: 1.05, marginBottom: 20 }}>
+              <h2 style={{ fontSize: "clamp(28px, 3.33vw, 40px)", fontWeight: 900, color: TEXT, letterSpacing: -1.5, lineHeight: 1.05, marginBottom: 20 }}>
                 Deploy in minutes.<br />
                 <span style={{ color: VERY_MUTED }}>Not weeks.</span>
               </h2>
@@ -1346,7 +1350,7 @@ export default function Landing() {
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {[
                   { icon: Shield, text: "OpenZeppelin-based contracts with full test suite" },
-                  { icon: Activity, text: "Hardhat deployment scripts for Base + Base Sepolia" },
+                  { icon: Activity, text: "Hardhat deployment scripts for Polygon + Polygon Amoy" },
                   { icon: Globe, text: "REST API for all campaign and proof operations" },
                 ].map(({ icon: Icon, text }) => (
                   <div key={text} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
@@ -1371,12 +1375,12 @@ export default function Landing() {
           <p style={{ fontSize: 10, color: VERY_MUTED, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", marginBottom: 14 }}>
             Two sides. One protocol.
           </p>
-          <h2 style={{ fontSize: 40, fontWeight: 900, color: TEXT, letterSpacing: -1.5 }}>
+          <h2 style={{ fontSize: "clamp(28px, 3.33vw, 40px)", fontWeight: 900, color: TEXT, letterSpacing: -1.5 }}>
             Built for both sides of the deal
           </h2>
         </Reveal>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div className="r-grid-2" style={{ gap: 16 }}>
           {[
             {
               role: "For Brands",
@@ -1449,11 +1453,11 @@ export default function Landing() {
           <p style={{ fontSize: 10, color: VERY_MUTED, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase", marginBottom: 14 }}>
             The case for Influencity
           </p>
-          <h2 style={{ fontSize: 40, fontWeight: 900, color: TEXT, letterSpacing: -1.5 }}>
+          <h2 style={{ fontSize: "clamp(28px, 3.33vw, 40px)", fontWeight: 900, color: TEXT, letterSpacing: -1.5 }}>
             The industry is broken on both sides
           </h2>
         </Reveal>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div className="r-grid-2" style={{ gap: 16 }}>
           {[
             {
               label: "Today's reality", color: DANGER, bg: "rgba(248,113,113,0.03)", borderColor: "rgba(248,113,113,0.12)",
@@ -1511,7 +1515,7 @@ export default function Landing() {
         </Reveal>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", maxWidth: 900, margin: "0 auto" }}>
           {[
-            { name: "Base", desc: "L2 Ethereum" },
+            { name: "Polygon", desc: "PoS sidechain" },
             { name: "Chainlink Functions", desc: "Oracle network" },
             { name: "Chainlink Automation", desc: "Trustless scheduling" },
             { name: "IPFS + Filecoin", desc: "Storage proofs" },
@@ -1581,7 +1585,7 @@ export default function Landing() {
               <div key={line} style={{ overflow: "hidden" }}>
                 <Reveal delay={i * 0.1}>
                   <p style={{
-                    fontSize: 64, fontWeight: 900, lineHeight: 1,
+                    fontSize: "clamp(37px, 5.33vw, 64px)", fontWeight: 900, lineHeight: 1,
                     letterSpacing: -3, color: i === 0 ? TEXT : MUTED,
                   }}>
                     {line}
@@ -1652,7 +1656,7 @@ export default function Landing() {
             <span style={{ fontSize: 13, fontWeight: 800, color: TEXT }}>Influencity</span>
           </div>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-            {["Base", "Chainlink Functions", "IPFS + Filecoin", "OpenZeppelin"].map((t) => (
+            {["Polygon", "Chainlink Functions", "IPFS + Filecoin", "OpenZeppelin"].map((t) => (
               <span key={t} style={{ fontSize: 11, color: VERY_MUTED }}>{t}</span>
             ))}
           </div>

@@ -17,10 +17,11 @@ import StatusBadge from "@/components/shared/StatusBadge";
 import PlatformIcon from "@/components/shared/PlatformIcon";
 import LoadingSpinner, { PageLoader } from "@/components/shared/LoadingSpinner";
 import EmptyState from "@/components/shared/EmptyState";
-import { useCampaigns } from "@/hooks/useCampaign";
+import { useCampaigns, useMyApplications } from "@/hooks/useCampaign";
 import { useReputation } from "@/hooks/useReputation";
 import { useSIWE } from "@/components/wallet/SIWEProvider";
 import { truncateAddress, formatUSDC, formatDeadline } from "@/lib/utils";
+import TestnetFaucet from "@/components/shared/TestnetFaucet";
 import { cn } from "@/lib/utils";
 
 // ─────────────────────────────────────────────
@@ -74,7 +75,7 @@ function StatCard({ label, value, sub, icon: Icon, trend, delay = 0 }) {
           </div>
         )}
       </div>
-      <p style={{ fontSize: 28, fontWeight: 900, color: TEXT, letterSpacing: -1, fontFamily: "monospace", marginBottom: 4 }}>
+      <p style={{ fontSize: "clamp(24px, 2.33vw, 28px)", fontWeight: 900, color: TEXT, letterSpacing: -1, fontFamily: "monospace", marginBottom: 4 }}>
         {value}
       </p>
       {sub && (
@@ -117,11 +118,8 @@ function CampaignRow({ campaign, role, index }) {
         border: `1px solid ${hovered ? BORDER2 : BORDER}`,
         cursor: "pointer",
         transition: "all 0.15s",
-        display: "grid",
-        gridTemplateColumns: "1fr auto auto auto auto",
-        alignItems: "center",
-        gap: 20,
       }}
+      className="r-row"
     >
       {/* Campaign info */}
       <div style={{ minWidth: 0 }}>
@@ -155,7 +153,7 @@ function CampaignRow({ campaign, role, index }) {
       </div>
 
       {/* Progress */}
-      <div style={{ width: 100 }}>
+      <div className="r-row-wide" style={{ width: 100 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
           <span style={{ fontSize: 10, color: VERY_MUTED }}>{metMilestones}/{milestones.length} milestones</span>
           <span style={{ fontSize: 10, color: MUTED }}>{progress}%</span>
@@ -171,7 +169,7 @@ function CampaignRow({ campaign, role, index }) {
       </div>
 
       {/* Amount */}
-      <div style={{ textAlign: "right" }}>
+      <div className="r-row-start" style={{ textAlign: "right" }}>
         <p style={{ fontSize: 14, fontWeight: 700, color: TEXT, fontFamily: "monospace" }}>
           ${formatUSDC(campaign.total_deposit_usdc)}
         </p>
@@ -209,7 +207,7 @@ function ReputationBadge({ score, history }) {
         <p style={{ fontSize: 12, color: MUTED, fontWeight: 500 }}>Reputation Score</p>
         <CheckCircle size={13} style={{ color: VERY_MUTED }} />
       </div>
-      <p style={{ fontSize: 36, fontWeight: 900, color: TEXT, letterSpacing: -2, fontFamily: "monospace", marginBottom: 4 }}>
+      <p style={{ fontSize: "clamp(27px, 3vw, 36px)", fontWeight: 900, color: TEXT, letterSpacing: -2, fontFamily: "monospace", marginBottom: 4 }}>
         {score}
       </p>
       <p style={{ fontSize: 11, color: VERY_MUTED, marginBottom: 16 }}>
@@ -278,6 +276,13 @@ export default function Dashboard() {
 
   const { data: campaigns = [], isLoading } = useCampaigns(address);
   const { score, mintHistory } = useReputation(address);
+  const { data: myApplications = [] } = useMyApplications(address);
+
+  // Applications that haven't (yet) resulted in a campaign assignment.
+  // Selected applications surface as the creator's campaigns in the list below.
+  const openApplications = myApplications.filter(
+    (a) => a.status === "pending" || a.status === "rejected"
+  );
 
   const brandCampaigns = campaigns.filter((c) => c.brand_address?.toLowerCase() === address?.toLowerCase());
   const creatorCampaigns = campaigns.filter((c) => c.creator_address?.toLowerCase() === address?.toLowerCase());
@@ -303,7 +308,7 @@ export default function Dashboard() {
               <motion.h1
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
-                style={{ fontSize: 28, fontWeight: 900, color: TEXT, letterSpacing: -1, marginBottom: 4 }}
+                style={{ fontSize: "clamp(24px, 2.33vw, 28px)", fontWeight: 900, color: TEXT, letterSpacing: -1, marginBottom: 4 }}
               >
                 Dashboard
               </motion.h1>
@@ -318,6 +323,10 @@ export default function Dashboard() {
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {/* Testnet faucet — only the deploy wallet is minted any USDC,
+                  so every other wallet needs a way to fund itself. */}
+              <TestnetFaucet />
+
               {/* Role toggle */}
               <div style={{
                 display: "flex", background: SURFACE2,
@@ -364,7 +373,7 @@ export default function Dashboard() {
           </div>
 
           {/* Stats grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 32 }}>
+          <div className="r-grid-4" style={{ gap: 12, marginBottom: 32 }}>
             <StatCard
               label={activeRole === "brand" ? "Total Locked" : "Total Earned"}
               value={`$${formatUSDC(activeRole === "brand" ? totalLocked : totalReleased)}`}
@@ -407,7 +416,7 @@ export default function Dashboard() {
           </div>
 
           {/* Main content */}
-          <div style={{ display: "grid", gridTemplateColumns: activeRole === "creator" ? "1fr 280px" : "1fr", gap: 20 }}>
+          <div className={activeRole === "creator" ? "r-grid-sidebar-sm" : undefined} style={activeRole === "creator" ? undefined : { display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
 
             {/* Left — campaigns + chart */}
             <div>
@@ -450,6 +459,87 @@ export default function Dashboard() {
                       />
                     </AreaChart>
                   </ResponsiveContainer>
+                </motion.div>
+              )}
+
+              {/* Your applications — creator only, non-selected ones */}
+              {activeRole === "creator" && openApplications.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.22 }}
+                  style={{
+                    padding: "20px 24px",
+                    borderRadius: 12,
+                    background: SURFACE,
+                    border: `1px solid ${BORDER}`,
+                    marginBottom: 20,
+                  }}
+                >
+                  <p style={{ fontSize: 13, fontWeight: 700, color: TEXT, marginBottom: 14 }}>
+                    Your applications
+                    <span style={{ color: VERY_MUTED, fontWeight: 500, marginLeft: 6 }}>
+                      ({openApplications.length})
+                    </span>
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {openApplications.map((app) => {
+                      const c = app.campaigns;
+                      const target = c?.contract_address || c?.campaign_id_onchain || c?.id;
+                      const color = app.status === "rejected" ? DANGER : WARNING;
+                      return (
+                        <div
+                          key={app.id}
+                          onClick={() => target && navigate(`/campaigns/${target}`)}
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            padding: "10px 14px",
+                            borderRadius: 9,
+                            background: SURFACE2,
+                            border: `1px solid ${BORDER}`,
+                            cursor: target ? "pointer" : "default",
+                            transition: "all 0.15s",
+                          }}
+                        >
+                          <div style={{ minWidth: 0, marginRight: 12 }}>
+                            <p
+                              style={{
+                                fontSize: 12,
+                                fontWeight: 600,
+                                color: TEXT,
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                              }}
+                            >
+                              {c?.title || "Untitled campaign"}
+                            </p>
+                            <p style={{ fontSize: 10, color: VERY_MUTED, marginTop: 2 }}>
+                              Applied {new Date(app.created_at).toLocaleDateString()}
+                            </p>
+                          </div>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              textTransform: "uppercase",
+                              letterSpacing: 0.6,
+                              padding: "3px 8px",
+                              borderRadius: 100,
+                              color,
+                              background: `${color}1a`,
+                              border: `1px solid ${color}33`,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {app.status === "rejected" ? "Not selected" : "Pending"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </motion.div>
               )}
 

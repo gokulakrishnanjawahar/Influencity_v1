@@ -58,7 +58,6 @@ export async function uploadCampaignBrief(brief) {
           type: "campaign_brief",
           campaignId: brief.campaignId,
           brandAddress: brief.brandAddress,
-          creatorAddress: brief.creatorAddress,
         },
       },
     });
@@ -229,7 +228,9 @@ export function buildGatewayUrl(cid) {
 // ─────────────────────────────────────────────
 
 function validateBrief(brief) {
-  const required = ["campaignId", "brandAddress", "creatorAddress", "milestones"];
+  // creatorAddress is intentionally NOT required — campaigns are posted as
+  // open listings and a creator is bound later when the brand selects one.
+  const required = ["campaignId", "brandAddress", "milestones"];
   for (const field of required) {
     if (!brief[field]) {
       throw new Error(`Campaign brief missing required field: ${field}`);

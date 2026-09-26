@@ -20,7 +20,6 @@ export const CAMPAIGN_FACTORY_ABI = [
     type: "function",
     stateMutability: "nonpayable",
     inputs: [
-      { name: "_creator", type: "address" },
       { name: "_ipfsBriefHash", type: "string" },
       { name: "_platforms", type: "uint8[]" },
       { name: "_metricTypes", type: "uint8[]" },
@@ -69,8 +68,25 @@ export const CAMPAIGN_FACTORY_ABI = [
       { name: "campaignId", type: "uint256", indexed: true },
       { name: "escrowAddress", type: "address", indexed: true },
       { name: "brand", type: "address", indexed: true },
-      { name: "creator", type: "address", indexed: false },
       { name: "ipfsBriefHash", type: "string", indexed: false },
+    ],
+  },
+  {
+    name: "assignCreator",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "_campaignId", type: "uint256" },
+      { name: "_creator", type: "address" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "CreatorAssigned",
+    type: "event",
+    inputs: [
+      { name: "campaignId", type: "uint256", indexed: true },
+      { name: "creator", type: "address", indexed: true },
     ],
   },
 ];
@@ -235,6 +251,36 @@ export const CAMPAIGN_ESCROW_ABI = [
       { name: "remainderRefunded", type: "uint256", indexed: false },
     ],
   },
+  {
+    name: "cancelCampaign",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [],
+    outputs: [],
+  },
+  {
+    name: "isCancelled",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    name: "CreatorAssigned",
+    type: "event",
+    inputs: [
+      { name: "campaignId", type: "uint256", indexed: true },
+      { name: "creator", type: "address", indexed: true },
+    ],
+  },
+  {
+    name: "CampaignCancelled",
+    type: "event",
+    inputs: [
+      { name: "campaignId", type: "uint256", indexed: true },
+      { name: "refundedToBrand", type: "uint256", indexed: false },
+    ],
+  },
 ];
 
 // ── ReputationToken ABI ──
@@ -265,6 +311,15 @@ export const REPUTATION_TOKEN_ABI = [
     ],
   },
   {
+    // MockUSDC only — a permissionless mint so any test wallet can fund itself.
+    // Absent from real USDC, which is why TestnetFaucet is testnet-gated.
+    name: "faucet",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "amount", type: "uint256" }],
+    outputs: [],
+  },
+  {
     name: "balanceOf",
     type: "function",
     stateMutability: "view",
@@ -283,9 +338,24 @@ export const REPUTATION_TOKEN_ABI = [
   },
 ];
 
-// ── USDC Address on Base Sepolia ──
-export const USDC_ADDRESS = import.meta.env.VITE_USDC_ADDRESS ||
-  "0x74f02d2228A9A71c59f49a8910Fb358807DdF856";
+// ── USDC Address ──
+// No fallback on purpose. A hardcoded default here is a chain-specific
+// address: if the env var is missing, the app would quietly send approvals to
+// whatever happens to sit at that address on the active chain. Failing loudly
+// at startup is far safer than a silent wrong-token approval.
+//
+// Polygon Amoy   → the MockUSDC deployed by scripts/deploy.js
+// Polygon mainnet → native USDC 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359
+//                   (bridged USDC.e is 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174)
+// Both are 6-decimal, matching USDC_DECIMALS in lib/constants.js.
+export const USDC_ADDRESS = import.meta.env.VITE_USDC_ADDRESS;
+
+if (!USDC_ADDRESS) {
+  console.error(
+    "[config] VITE_USDC_ADDRESS is not set — deposits will fail. " +
+      "Set it in client/.env.local to the USDC address for your target chain."
+  );
+}
 
 // ── USDC ABI (minimal — just what we need) ──
 export const USDC_ABI = [

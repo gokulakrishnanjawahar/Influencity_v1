@@ -108,3 +108,188 @@
     border-radius: inherit;
   }
 }
+/* ─────────────────────────────────────────────
+   Responsive layout utilities
+   ─────────────────────────────────────────────
+   The page components lay out with inline style={{}} objects, which cannot
+   carry media queries. These classes replace the fixed gridTemplateColumns
+   and gap declarations at each breaking layout so the same markup reflows.
+
+   Each class owns its gap as well as its columns: an inline `gap` would win
+   over the class at every viewport and silently defeat the media query.
+
+   Breakpoints: 1024px laptop → tablet, 768px tablet → large phone,
+   480px large phone → small phone.
+   ───────────────────────────────────────────── */
+
+/* Global overflow guard. One stray fixed-width child shouldn't let the whole
+   document scroll sideways on a phone. */
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* ── Stat / feature grids ── */
+.r-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+@media (max-width: 900px) {
+  .r-grid-4 { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .r-grid-4 { grid-template-columns: 1fr; }
+}
+
+.r-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+@media (max-width: 900px) {
+  .r-grid-3 { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .r-grid-3 { grid-template-columns: 1fr; }
+}
+
+.r-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+@media (max-width: 768px) {
+  .r-grid-2 { grid-template-columns: 1fr; }
+}
+
+/* Five compact cells (landing terminal strip) — never fewer than two. */
+.r-grid-5 {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+}
+@media (max-width: 600px) {
+  .r-grid-5 { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ── Main content + sidebar ── */
+/* Collapses to a single column early: a 280-300px rail plus body text needs
+   real width to stay readable. */
+.r-grid-sidebar {
+  display: grid;
+  gap: 20px;
+}
+@media (min-width: 1025px) {
+  .r-grid-sidebar { grid-template-columns: 1fr 300px; }
+}
+.r-grid-sidebar-sm {
+  display: grid;
+  gap: 20px;
+}
+@media (min-width: 1025px) {
+  .r-grid-sidebar-sm { grid-template-columns: 1fr 280px; }
+}
+
+/* ── Landing: two-column hero / narrative sections ── */
+/* Wide gaps (64-80px) are luxurious on a laptop and wasteful once stacked. */
+.r-grid-hero {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 64px;
+  align-items: center;
+}
+@media (max-width: 900px) {
+  .r-grid-hero {
+    grid-template-columns: 1fr;
+    gap: 40px;
+  }
+}
+
+.r-grid-narrative {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 80px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .r-grid-narrative {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+}
+
+/* The sticky left rail in "How it works" must stop sticking once stacked,
+   or it pins itself over the content it's meant to introduce. */
+@media (max-width: 900px) {
+  .r-unstick { position: static !important; }
+}
+
+/* ── Dashboard campaign row ── */
+/* "1fr auto auto auto auto" is a table masquerading as a grid; below tablet
+   it becomes a stacked card with the columns as wrapped rows. */
+.r-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto auto;
+  gap: 16px;
+  align-items: center;
+}
+@media (max-width: 860px) {
+  .r-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    align-items: start;
+  }
+}
+
+/* ── Utilities ── */
+/* Right-aligned copy reads as a mistake once its counterpart stacks above. */
+@media (max-width: 900px) {
+  .r-align-reset { text-align: left !important; }
+}
+
+/* Hide the desktop nav links on phones — the hamburger takes over. */
+@media (max-width: 768px) {
+  .r-nav-links { display: none !important; }
+}
+
+/* Decorative absolutely-positioned glows: keep them from widening the page. */
+.r-decor {
+  max-width: 100vw;
+}
+
+/* ── Landing: scroll-jacked horizontal gallery ── */
+/* On a laptop this is a 280vh section that translates a track sideways as you
+   scroll. That transform is a percentage of the track, not the viewport, so on
+   a phone it stops short of the last cards — and hijacking 280vh of vertical
+   scroll on touch is miserable regardless. Below 900px we unwind the whole
+   mechanism into a normal swipeable row. */
+@media (max-width: 900px) {
+  .r-hscroll {
+    height: auto !important;
+  }
+  .r-hscroll-sticky {
+    position: static !important;
+    height: auto !important;
+    overflow-x: auto !important;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x mandatory;
+  }
+  /* framer-motion writes the translation as an inline style, so overriding it
+     needs !important. */
+  .r-hscroll-track {
+    transform: none !important;
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+    padding-top: 24px;
+    padding-bottom: 24px;
+  }
+  .r-hscroll-track > * {
+    scroll-snap-align: center;
+  }
+}
+
+/* Children of a stacked .r-row: the 100px progress cell and the right-aligned
+   amount both need to unwind at the same breakpoint the row itself does. */
+@media (max-width: 860px) {
+  .r-row-wide { width: 100% !important; }
+  .r-row-start { text-align: left !important; }
+}

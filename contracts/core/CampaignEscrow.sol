@@ -21,7 +21,8 @@ contract CampaignEscrow is ReentrancyGuard, Ownable {
     /// @notice The brand that created and funded this campaign
     address public brand;
 
-    /// @notice The creator receiving payouts
+    /// @notice The creator receiving payouts — unset (address(0)) until the
+    /// brand selects an applicant and the agreement is formed
     address public creator;
 
     /// @notice USDC token contract
@@ -48,19 +49,28 @@ contract CampaignEscrow is ReentrancyGuard, Ownable {
     /// @notice Whether the campaign has been finalised
     bool public isFinalized;
 
+    /// @notice Whether the campaign was cancelled by the brand before a creator was assigned
+    bool public isCancelled;
+
     /// @notice Array of all milestones for this campaign
     MilestoneLib.Milestone[] public milestones;
+
+    /// @notice Upper bound on milestones per campaign. finalizeCampaign() and the
+    /// Chainlink automation sweep both iterate this array, so it must stay small
+    /// enough that neither can be pushed past the block gas limit.
+    uint256 public constant MAX_MILESTONES = 20;
 
     // ─────────────────────────────────────────────
     // Events
     // ─────────────────────────────────────────────
 
-    event CampaignInitialised(
+    /// @notice Emitted when the brand locks USDC into the escrow. Deposits were
+    /// previously silent on-chain, leaving event listeners unable to observe
+    /// funding. (Replaces CampaignInitialised, which described the old flow
+    /// where a creator existed at construction, and was never emitted.)
+    event CampaignFunded(
         uint256 indexed campaignId,
-        address indexed brand,
-        address indexed creator,
-        uint256 totalDeposit,
-        string ipfsBriefHash
+        uint256 amount
     );
 
     event MilestoneAdded(
@@ -97,6 +107,16 @@ contract CampaignEscrow is ReentrancyGuard, Ownable {
         uint256 remainderRefunded
     );
 
+    event CreatorAssigned(
+        uint256 indexed campaignId,
+        address indexed creator
+    );
+
+    event CampaignCancelled(
+        uint256 indexed campaignId,
+        uint256 refundedToBrand
+    );
+
     // ─────────────────────────────────────────────
     // Modifiers
     // ─────────────────────────────────────────────
@@ -128,28 +148,26 @@ contract CampaignEscrow is ReentrancyGuard, Ownable {
 
     /// @param _campaignId       Unique ID from CampaignFactory
     /// @param _brand            Wallet address of the brand
-    /// @param _creator          Wallet address of the creator
     /// @param _usdc             Address of the USDC token contract
     /// @param _reputationToken  Address of the ReputationToken contract
     /// @param _metricsConsumer  Address of the MetricsConsumer oracle contract
     /// @param _ipfsBriefHash    IPFS CID of the campaign brief
+    /// @dev The creator is intentionally NOT set here — campaigns are deployed
+    /// as open listings and a creator is bound later via assignCreator().
     constructor(
         uint256 _campaignId,
         address _brand,
-        address _creator,
         address _usdc,
         address _reputationToken,
         address _metricsConsumer,
         string memory _ipfsBriefHash
     ) Ownable(msg.sender) {
         require(_brand != address(0), "CampaignEscrow: invalid brand address");
-        require(_creator != address(0), "CampaignEscrow: invalid creator address");
         require(_usdc != address(0), "CampaignEscrow: invalid USDC address");
         require(bytes(_ipfsBriefHash).length > 0, "CampaignEscrow: brief hash required");
 
         campaignId = _campaignId;
         brand = _brand;
-        creator = _creator;
         usdc = IERC20(_usdc);
         reputationToken = IReputationToken(_reputationToken);
         metricsConsumer = _metricsConsumer;
@@ -180,6 +198,7 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
         require(success, "CampaignEscrow: USDC transfer failed");
 
         totalDeposit = amount;
+        emit CampaignFunded(campaignId, amount);
     }
 
     /// @notice Add a milestone to this campaign. Called by CampaignFactory during setup.
@@ -192,6 +211,10 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
         uint256 _deadline,
         string memory _contentId
     ) external onlyOwner notFinalized {
+        require(
+            milestones.length < MAX_MILESTONES,
+            "CampaignEscrow: too many milestones"
+        );
         require(
             MilestoneLib.isValidMilestone(_threshold, _trancheAmount, _deadline),
             "CampaignEscrow: invalid milestone parameters"
@@ -228,6 +251,23 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
         );
     }
 
+    /// @notice Binds the chosen creator to this campaign, forming the agreement.
+    /// Called once by the CampaignFactory after the brand selects an applicant.
+    /// Can only be set while the campaign is still open (no creator yet).
+    /// @param _creator Wallet address of the selected creator
+    function assignCreator(address _creator) external onlyOwner notFinalized {
+        require(creator == address(0), "CampaignEscrow: creator already assigned");
+        require(_creator != address(0), "CampaignEscrow: invalid creator address");
+        require(_creator != brand, "CampaignEscrow: brand and creator cannot be same");
+        // Binding a creator to an empty escrow forms an agreement that can never
+        // pay out: every _releaseTranche would revert on the USDC transfer, which
+        // in turn reverts the oracle callback that triggered it.
+        require(totalDeposit > 0, "CampaignEscrow: campaign not funded");
+
+        creator = _creator;
+        emit CreatorAssigned(campaignId, _creator);
+    }
+
     /// @notice Creator submits IPFS proof hash for a specific milestone
     function submitProof(uint256 milestoneIndex, string memory _ipfsProofHash) external notFinalized {
         require(msg.sender == creator, "CampaignEscrow: caller is not creator");
@@ -237,6 +277,10 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
             "CampaignEscrow: milestone not pending"
         );
         require(bytes(_ipfsProofHash).length > 0, "CampaignEscrow: proof hash required");
+        require(
+            !MilestoneLib.isExpired(milestones[milestoneIndex]),
+            "CampaignEscrow: milestone deadline passed"
+        );
 
         milestones[milestoneIndex].ipfsProofHash = _ipfsProofHash;
     }
@@ -253,6 +297,7 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
         uint256 milestoneIndex,
         uint256 reportedValue
     ) external onlyMetricsConsumer notFinalized nonReentrant {
+        require(creator != address(0), "CampaignEscrow: no creator assigned");
         require(milestoneIndex < milestones.length, "CampaignEscrow: invalid milestone index");
 
         MilestoneLib.Milestone storage milestone = milestones[milestoneIndex];
@@ -332,13 +377,21 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
             "CampaignEscrow: not authorized to finalize"
         );
 
-        // Fail any milestones that are still pending but expired
+        // Settle every outstanding milestone first. A pending milestone past its
+        // deadline is failed and refunded here; one that is still live blocks
+        // finalization outright.
+        //
+        // Without that block the sweep below would hand the brand every
+        // unresolved tranche on demand — including one the creator has already
+        // earned but the oracle has not yet reported on — which would make the
+        // escrow's core guarantee (a met milestone always pays) unenforceable.
         for (uint256 i = 0; i < milestones.length; i++) {
             MilestoneLib.Milestone storage milestone = milestones[i];
-            if (
-                milestone.status == MilestoneLib.MilestoneStatus.PENDING &&
-                MilestoneLib.isExpired(milestone)
-            ) {
+            if (milestone.status == MilestoneLib.MilestoneStatus.PENDING) {
+                require(
+                    MilestoneLib.isExpired(milestone),
+                    "CampaignEscrow: milestone still live"
+                );
                 _failMilestone(i);
             }
         }
@@ -352,6 +405,30 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
 
         isFinalized = true;
         emit CampaignFinalized(campaignId, remainder);
+    }
+
+    // ─────────────────────────────────────────────
+    // Campaign Cancellation
+    // ─────────────────────────────────────────────
+
+    /// @notice Cancels an open campaign and refunds the entire locked balance
+    /// to the brand. Only callable while the campaign is still open — once a
+    /// creator has been assigned the agreement is binding and cannot be cancelled.
+    function cancelCampaign() external onlyBrand notFinalized nonReentrant {
+        require(
+            creator == address(0),
+            "CampaignEscrow: creator already assigned, cannot cancel"
+        );
+
+        uint256 refund = usdc.balanceOf(address(this));
+        if (refund > 0) {
+            bool success = usdc.transfer(brand, refund);
+            require(success, "CampaignEscrow: refund to brand failed");
+        }
+
+        isCancelled = true;
+        isFinalized = true;
+        emit CampaignCancelled(campaignId, refund);
     }
 
     // ─────────────────────────────────────────────

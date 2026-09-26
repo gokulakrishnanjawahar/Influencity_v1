@@ -80,7 +80,7 @@ export default function NotFound() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
           style={{
-            fontSize: 120,
+            fontSize: "clamp(56px, 10vw, 120px)",
             fontWeight: 900,
             color: TEXT,
             letterSpacing: -6,
@@ -98,7 +98,7 @@ export default function NotFound() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.15 }}
           style={{
-            fontSize: 28,
+            fontSize: "clamp(24px, 2.33vw, 28px)",
             fontWeight: 900,
             color: TEXT,
             letterSpacing: -1,

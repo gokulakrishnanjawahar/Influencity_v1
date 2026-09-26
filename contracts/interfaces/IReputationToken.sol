@@ -13,4 +13,8 @@ interface IReputationToken {
         uint256 milestoneIndex,
         uint256 campaignId
     ) external;
+
+    /// @notice Authorises a CampaignEscrow contract to mint reputation tokens
+    /// @param escrowAddress Address of the CampaignEscrow to authorise
+    function authoriseMinter(address escrowAddress) external;
 }

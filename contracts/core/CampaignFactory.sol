@@ -3,6 +3,9 @@ pragma solidity ^0.8.24;
 
 import "./CampaignEscrow.sol";
 import "../libraries/MilestoneLib.sol";
+import "../interfaces/IReputationToken.sol";
+import "../interfaces/IMetricsConsumer.sol";
+import "../interfaces/IAutomationHandler.sol";
 
 /// @title CampaignFactory
 /// @notice Deploys a fresh CampaignEscrow for every new deal.
@@ -29,6 +32,11 @@ contract CampaignFactory {
     /// @notice Owner of the factory — can update protocol addresses
     address public owner;
 
+    /// @notice Address of the AutomationHandler that sweeps campaigns for metric
+    /// checks. Optional: while unset, campaigns are still created and can be
+    /// driven by a mock oracle, they are simply not enrolled for automation.
+    address public automationHandler;
+
     /// @notice Registry: campaignId => escrow contract address
     mapping(uint256 => address) public campaignEscrows;
 
@@ -44,9 +52,15 @@ contract CampaignFactory {
         uint256 indexed campaignId,
         address indexed escrowAddress,
         address indexed brand,
-        address creator,
         string ipfsBriefHash
     );
+
+    event CreatorAssigned(
+        uint256 indexed campaignId,
+        address indexed creator
+    );
+
+    event AutomationHandlerSet(address indexed handler);
 
     event ProtocolAddressesUpdated(
         address usdc,
@@ -89,9 +103,9 @@ contract CampaignFactory {
     // Core Function — Create Campaign
     // ─────────────────────────────────────────────
 
-    /// @notice Deploys a new CampaignEscrow and registers it.
+    /// @notice Deploys a new CampaignEscrow as an open listing and registers it.
+    /// The campaign has no creator yet — one is bound later via assignCreator().
     /// Brand must call deposit() on the escrow after creation to fund it.
-    /// @param _creator         Wallet address of the creator
     /// @param _ipfsBriefHash   IPFS CID of the campaign brief
     /// @param _platforms       Array of platforms for each milestone
     /// @param _metricTypes     Array of metric types for each milestone
@@ -102,7 +116,6 @@ contract CampaignFactory {
     /// @return campaignId      The ID assigned to this campaign
     /// @return escrowAddress   The address of the deployed CampaignEscrow contract
     function createCampaign(
-        address _creator,
         string memory _ipfsBriefHash,
         MilestoneLib.Platform[] memory _platforms,
         MilestoneLib.MetricType[] memory _metricTypes,
@@ -112,8 +125,6 @@ contract CampaignFactory {
         string[] memory _contentIds
     ) external returns (uint256 campaignId, address escrowAddress) {
         // Validate inputs
-        require(_creator != address(0), "CampaignFactory: invalid creator address");
-        require(_creator != msg.sender, "CampaignFactory: brand and creator cannot be same");
         require(bytes(_ipfsBriefHash).length > 0, "CampaignFactory: brief hash required");
         require(_platforms.length > 0, "CampaignFactory: at least one milestone required");
         require(
@@ -133,7 +144,6 @@ contract CampaignFactory {
         CampaignEscrow escrow = new CampaignEscrow(
             campaignId,
             msg.sender,     // brand
-            _creator,
             usdc,
             reputationToken,
             metricsConsumer,
@@ -145,7 +155,23 @@ contract CampaignFactory {
         // Register in mappings
         campaignEscrows[campaignId] = escrowAddress;
         brandCampaigns[msg.sender].push(campaignId);
-        creatorCampaigns[_creator].push(campaignId);
+
+        // Authorise this escrow to mint reputation tokens when milestones are met
+        IReputationToken(reputationToken).authoriseMinter(escrowAddress);
+
+        // Authorise it to request metric verifications. Without this the oracle
+        // rejects every request the escrow makes, so no milestone can ever be
+        // verified and the campaign silently never pays out.
+        IMetricsConsumer(metricsConsumer).authoriseEscrow(escrowAddress);
+
+        // Enrol it in the automated sweep, when one is configured. Skipped while
+        // unset so local and mock-oracle deployments still work.
+        if (automationHandler != address(0)) {
+            IAutomationHandler(automationHandler).registerCampaign(
+                campaignId,
+                escrowAddress
+            );
+        }
 
         // Add milestones to the escrow
         // Note: deposit() must be called by brand BEFORE addMilestone checks pass,
@@ -166,9 +192,33 @@ contract CampaignFactory {
             campaignId,
             escrowAddress,
             msg.sender,
-            _creator,
             _ipfsBriefHash
         );
+    }
+
+    // ─────────────────────────────────────────────
+    // Assign Creator — Form the Agreement
+    // ─────────────────────────────────────────────
+
+    /// @notice Binds a selected creator to an open campaign, forming the agreement.
+    /// Only the brand that created the campaign may call this.
+    /// @param _campaignId The campaign to assign a creator to
+    /// @param _creator    Wallet address of the selected creator
+    function assignCreator(uint256 _campaignId, address _creator) external {
+        address escrowAddress = campaignEscrows[_campaignId];
+        require(escrowAddress != address(0), "CampaignFactory: campaign not found");
+
+        CampaignEscrow escrow = CampaignEscrow(escrowAddress);
+        require(
+            msg.sender == escrow.brand(),
+            "CampaignFactory: caller is not the campaign brand"
+        );
+
+        // Escrow validates open state, zero address, and brand != creator
+        escrow.assignCreator(_creator);
+
+        creatorCampaigns[_creator].push(_campaignId);
+        emit CreatorAssigned(_campaignId, _creator);
     }
 
     // ─────────────────────────────────────────────
@@ -194,6 +244,14 @@ contract CampaignFactory {
     // ─────────────────────────────────────────────
     // Admin Functions
     // ─────────────────────────────────────────────
+
+    /// @notice Sets the AutomationHandler that new campaigns are registered with.
+    /// Existing campaigns are unaffected — they stay with whatever handler was
+    /// configured when they were created.
+    function setAutomationHandler(address _handler) external onlyOwner {
+        automationHandler = _handler;
+        emit AutomationHandlerSet(_handler);
+    }
 
     /// @notice Updates protocol-level addresses — only callable by owner
     /// Useful if MetricsConsumer or ReputationToken is redeployed

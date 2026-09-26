@@ -20,8 +20,8 @@ export function HexMark({ size = 28 }) {
 
 const publicLinks = [
   { label: "How it works", href: "/#how-it-works" },
-  { label: "For Brands", href: "/#brands" },
-  { label: "For Creators", href: "/#creators" },
+  { label: "For Brands", href: "/campaigns/new" },
+  { label: "For Creators", href: "/campaigns/browse" },
 ];
 
 const appLinks = [
@@ -56,10 +56,11 @@ export default function Navbar() {
           style={{
             maxWidth: 1200,
             margin: "0 auto",
-            padding: "0 24px",
+            padding: "0 16px",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
+            gap: 12,
             height: 60,
           }}
         >
@@ -71,13 +72,13 @@ export default function Navbar() {
             </span>
           </Link>
 
-          {/* Center nav */}
-          <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+          {/* Center nav — hidden below 768px, where the hamburger takes over */}
+          <div className="r-nav-links" style={{ display: "flex", alignItems: "center", gap: 2 }}>
             {publicLinks.map((item) => {
               return (
-                <a
+                <Link
                   key={item.label}
-                  href={item.href}
+                  to={item.href}
                   style={{
                     padding: "7px 13px",
                     borderRadius: 8,
@@ -91,7 +92,7 @@ export default function Navbar() {
                   onMouseLeave={() => setHoveredLink(null)}
                 >
                   {item.label}
-                </a>
+                </Link>
               );
             })}
 
@@ -185,9 +186,9 @@ export default function Navbar() {
           >
             {publicLinks.map((item) => {
               return (
-                <a
+                <Link
                   key={item.label}
-                  href={item.href}
+                  to={item.href}
                   onClick={() => setMobileOpen(false)}
                   style={{
                     display: "block",
@@ -199,7 +200,7 @@ export default function Navbar() {
                   }}
                 >
                   {item.label}
-                </a>
+                </Link>
               );
             })}
 

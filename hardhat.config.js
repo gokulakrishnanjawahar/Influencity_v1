@@ -5,9 +5,15 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "0x" + "0".repeat(64);
-const BASE_SEPOLIA_RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
-const BASE_MAINNET_RPC_URL = process.env.BASE_MAINNET_RPC_URL || "https://mainnet.base.org";
-const BASESCAN_API_KEY = process.env.BASESCAN_API_KEY || "";
+const POLYGON_AMOY_RPC_URL =
+  process.env.POLYGON_AMOY_RPC_URL || "https://rpc-amoy.polygon.technology";
+const POLYGON_MAINNET_RPC_URL =
+  process.env.POLYGON_MAINNET_RPC_URL || "https://polygon-rpc.com";
+
+// Etherscan V2 uses one multichain API key across all supported networks,
+// Polygon included. Standalone Polygonscan V1 keys are deprecated — get a key
+// from etherscan.io, not polygonscan.com.
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
 
 export default {
   plugins: [hardhatEthers, hardhatVerify, hardhatNodeTestRunner],
@@ -19,6 +25,11 @@ export default {
         enabled: true,
         runs: 200,
       },
+      // Polygon PoS enabled the Cancun EIPs in the Ahmedabad hardfork, so this
+      // is supported on both Amoy and mainnet. Nothing in these contracts
+      // actually needs Cancun opcodes (plain ReentrancyGuard, not the
+      // transient-storage variant), so drop to "shanghai" if a deploy ever
+      // reverts with an invalid-opcode error on an older node.
       evmVersion: "cancun",
     },
   },
@@ -28,43 +39,32 @@ export default {
       type: "edr-simulated",
       chainId: 31337,
     },
-    baseSepolia: {
+    polygonAmoy: {
       type: "http",
-      url: BASE_SEPOLIA_RPC_URL,
+      url: POLYGON_AMOY_RPC_URL,
       accounts: [PRIVATE_KEY],
-      chainId: 84532,
+      chainId: 80002,
+      // Amoy's suggested gas price spikes hard and erratically — 450+ gwei
+      // observed against a ~25-30 gwei floor. Left unset, Hardhat takes that
+      // suggestion, and a deploy costing 0.2 POL at 30 gwei suddenly needs 3.
+      // Pin it with AMOY_GAS_PRICE_GWEI=30 when the quote looks absurd; the tx
+      // just waits a little longer, which on a testnet costs nothing.
+      ...(process.env.AMOY_GAS_PRICE_GWEI
+        ? { gasPrice: Math.round(Number(process.env.AMOY_GAS_PRICE_GWEI) * 1e9) }
+        : {}),
     },
-    base: {
+    polygon: {
       type: "http",
-      url: BASE_MAINNET_RPC_URL,
+      url: POLYGON_MAINNET_RPC_URL,
       accounts: [PRIVATE_KEY],
-      chainId: 8453,
+      chainId: 137,
     },
   },
 
+  // hardhat-verify v3 has built-in support for polygon and polygonAmoy via the
+  // Etherscan V2 API, so no customChains block is needed.
   etherscan: {
-    apiKey: {
-      baseSepolia: BASESCAN_API_KEY,
-      base: BASESCAN_API_KEY,
-    },
-    customChains: [
-      {
-        network: "baseSepolia",
-        chainId: 84532,
-        urls: {
-          apiURL: "https://api-sepolia.basescan.org/api",
-          browserURL: "https://sepolia.basescan.org",
-        },
-      },
-      {
-        network: "base",
-        chainId: 8453,
-        urls: {
-          apiURL: "https://api.basescan.org/api",
-          browserURL: "https://basescan.org",
-        },
-      },
-    ],
+    apiKey: ETHERSCAN_API_KEY,
   },
 
   paths: {

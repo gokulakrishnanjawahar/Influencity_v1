@@ -21,12 +21,21 @@ export function requireAuth(req, res, next) {
   try {
     const walletAddress = req.headers["x-wallet-address"];
     const signature = req.headers["x-wallet-signature"];
-    const message = req.headers["x-siwe-message"];
+    const rawMessage = req.headers["x-siwe-message"];
 
-    if (!walletAddress || !signature || !message) {
+    if (!walletAddress || !signature || !rawMessage) {
       return res.status(401).json({
         error: "Authentication required. Provide wallet address and signature.",
       });
+    }
+
+    // The frontend base64-encodes the SIWE message because HTTP header values
+    // can't contain newlines. Decode here so we verify against the original.
+    let message;
+    try {
+      message = Buffer.from(rawMessage, "base64").toString("utf8");
+    } catch (_e) {
+      message = rawMessage;
     }
 
     if (!ethers.isAddress(walletAddress)) {

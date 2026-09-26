@@ -18,6 +18,12 @@ import {
   updateMilestoneProof,
   createContentProof,
   getOrCreateUser,
+  getOpenCampaigns,
+  createApplication,
+  getApplicationsForCampaign,
+  getApplication,
+  selectApplicant,
+  cancelCampaignRecord,
 } from "../services/supabase.js";
 import { requireAuth, optionalAuth } from "../middleware/auth.js";
 
@@ -33,7 +39,6 @@ router.post("/", requireAuth, async (req, res, next) => {
   try {
     const {
       brandAddress,
-      creatorAddress,
       title,
       description,
       milestones,
@@ -45,9 +50,6 @@ router.post("/", requireAuth, async (req, res, next) => {
     }
 
     // Validate inputs
-    if (!creatorAddress || !ethers.isAddress(creatorAddress)) {
-      return res.status(400).json({ error: "Invalid creator wallet address" });
-    }
     if (!title?.trim()) {
       return res.status(400).json({ error: "Campaign title is required" });
     }
@@ -57,8 +59,10 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     for (let i = 0; i < milestones.length; i++) {
       const m = milestones[i];
+      // contentId is intentionally NOT required at publish time — the creator
+      // fills it in when they submit proof for that milestone.
       if (!m.platform || !m.metricType || !m.threshold ||
-          !m.trancheAmount || !m.deadline || !m.contentId) {
+          !m.trancheAmount || !m.deadline) {
         return res.status(400).json({
           error: `Milestone ${i} is missing required fields`,
         });
@@ -71,7 +75,6 @@ router.post("/", requireAuth, async (req, res, next) => {
     const brief = {
       campaignId,
       brandAddress: brandAddress.toLowerCase(),
-      creatorAddress: creatorAddress.toLowerCase(),
       title: title.trim(),
       description: description?.trim() || "",
       milestones: milestones.map((m, i) => ({
@@ -95,7 +98,6 @@ router.post("/", requireAuth, async (req, res, next) => {
       ipfsBriefCid: cid,
       ipfsBriefUrl: url,
       contractParams: {
-        creatorAddress,
         ipfsBriefHash: cid,
         platforms: milestones.map((m) => platformToEnum(m.platform)),
         metricTypes: milestones.map((m) => metricTypeToEnum(m.metricType)),
@@ -121,7 +123,6 @@ router.post("/confirm", requireAuth, async (req, res, next) => {
     const {
       campaignIdOnchain,
       brandAddress,
-      creatorAddress,
       contractAddress,
       ipfsBriefCid,
       ipfsBriefUrl,
@@ -135,15 +136,13 @@ router.post("/confirm", requireAuth, async (req, res, next) => {
       return res.status(403).json({ error: "Authenticated wallet must match brandAddress" });
     }
 
-    // Ensure both users exist in DB
+    // Ensure the brand user exists in DB (creator is bound later on selection)
     await getOrCreateUser(brandAddress, "brand");
-    await getOrCreateUser(creatorAddress, "creator");
 
-    // Save campaign to Supabase
+    // Save campaign to Supabase as an open listing
     const campaign = await createCampaign({
       campaignIdOnchain,
       brandAddress,
-      creatorAddress,
       contractAddress,
       ipfsBriefCid,
       ipfsBriefUrl,
@@ -186,6 +185,21 @@ router.get("/", optionalAuth, async (req, res, next) => {
       success: true,
       campaigns,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────
+// GET /campaigns/open
+// Public marketplace — all open campaign listings awaiting a creator
+// NOTE: must be declared before GET /:id so "open" isn't treated as an id
+// ─────────────────────────────────────────────
+
+router.get("/open", async (req, res, next) => {
+  try {
+    const campaigns = await getOpenCampaigns();
+    res.json({ success: true, campaigns });
   } catch (error) {
     next(error);
   }
@@ -309,8 +323,163 @@ router.post("/:id/proof", requireAuth, async (req, res, next) => {
 });
 
 // ─────────────────────────────────────────────
+// POST /campaigns/:id/apply
+// Creator applies to an open campaign with a pitch + social profile links
+// ─────────────────────────────────────────────
+
+router.post("/:id/apply", requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { creatorAddress, pitchMessage, socialLinks } = req.body;
+
+    if (req.walletAddress !== creatorAddress?.toLowerCase()) {
+      return res.status(403).json({ error: "Authenticated wallet must match creatorAddress" });
+    }
+
+    const campaign = await resolveCampaign(id);
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    if (campaign.status !== "open") {
+      return res.status(400).json({ error: "Campaign is no longer accepting applications" });
+    }
+    if (campaign.brand_address === creatorAddress.toLowerCase()) {
+      return res.status(400).json({ error: "A brand cannot apply to their own campaign" });
+    }
+
+    // Ensure the creator exists as a user record
+    const creator = await getOrCreateUser(creatorAddress, "creator");
+
+    let application;
+    try {
+      application = await createApplication({
+        campaignId: campaign.id,
+        creatorId: creator?.id,
+        creatorAddress,
+        pitchMessage,
+        socialLinks,
+      });
+    } catch (err) {
+      if (err.code === "23505") {
+        return res.status(409).json({ error: "You have already applied to this campaign" });
+      }
+      throw err;
+    }
+
+    res.status(201).json({ success: true, application });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────
+// GET /campaigns/:id/applications
+// Returns all applications for a campaign (brand reviews these)
+// ─────────────────────────────────────────────
+
+router.get("/:id/applications", optionalAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const campaign = await resolveCampaign(id);
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    const applications = await getApplicationsForCampaign(campaign.id);
+    res.json({ success: true, campaignId: campaign.id, applications });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────
+// POST /campaigns/:id/select
+// Brand selects an applicant — forms the agreement.
+// Called AFTER the brand's assignCreator() transaction succeeds on-chain.
+// ─────────────────────────────────────────────
+
+router.post("/:id/select", requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { brandAddress, creatorAddress } = req.body;
+
+    if (req.walletAddress !== brandAddress?.toLowerCase()) {
+      return res.status(403).json({ error: "Authenticated wallet must match brandAddress" });
+    }
+    if (!creatorAddress || !ethers.isAddress(creatorAddress)) {
+      return res.status(400).json({ error: "Valid creatorAddress is required" });
+    }
+
+    const campaign = await resolveCampaign(id);
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    if (campaign.brand_address !== brandAddress.toLowerCase()) {
+      return res.status(403).json({ error: "Only the campaign brand can select a creator" });
+    }
+    if (campaign.status !== "open") {
+      return res.status(400).json({ error: "Campaign already has a creator or is closed" });
+    }
+
+    const application = await getApplication(campaign.id, creatorAddress);
+    if (!application) {
+      return res.status(404).json({ error: "That creator has not applied to this campaign" });
+    }
+
+    const creator = await getOrCreateUser(creatorAddress, "creator");
+    const updated = await selectApplicant(campaign.id, creatorAddress, creator?.id);
+
+    res.json({ success: true, campaign: updated });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────
+// POST /campaigns/:id/cancel
+// Brand withdraws an open campaign — closes it and rejects pending applications.
+// Called AFTER the brand's cancelCampaign() transaction succeeds on-chain.
+// ─────────────────────────────────────────────
+
+router.post("/:id/cancel", requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { brandAddress } = req.body;
+
+    if (req.walletAddress !== brandAddress?.toLowerCase()) {
+      return res.status(403).json({ error: "Authenticated wallet must match brandAddress" });
+    }
+
+    const campaign = await resolveCampaign(id);
+    if (!campaign) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    if (campaign.brand_address !== brandAddress.toLowerCase()) {
+      return res.status(403).json({ error: "Only the campaign brand can cancel it" });
+    }
+    if (campaign.status !== "open") {
+      return res.status(400).json({ error: "Only open campaigns can be cancelled" });
+    }
+
+    const updated = await cancelCampaignRecord(campaign.id);
+    res.json({ success: true, campaign: updated });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────
+
+/// @notice Resolves a campaign by on-chain ID or escrow contract address
+async function resolveCampaign(idOrAddress) {
+  if (ethers.isAddress(idOrAddress)) {
+    return getCampaignByContract(idOrAddress);
+  }
+  const parsed = parseInt(idOrAddress);
+  if (Number.isNaN(parsed)) return null;
+  return getCampaignByOnchainId(parsed);
+}
 
 function platformToEnum(platform) {
   const map = { YOUTUBE: 0, TWITCH: 1, LINKEDIN: 2 };

@@ -8,13 +8,29 @@ async function main() {
   const [deployer] = await ethers.getSigners();
 
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("  Influencity — Deploying to Base Sepolia");
+  console.log(`  Influencity — Deploying to ${connection.networkName}`);
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log(`  Deployer: ${deployer.address}`);
 
   const balance = await ethers.provider.getBalance(deployer.address);
-  console.log(`  Balance:  ${ethers.formatEther(balance)} ETH`);
+  // Gas on Polygon is paid in POL, not ETH — formatEther is just the
+  // 18-decimal formatter and is still correct for the amount.
+  console.log(`  Balance:  ${ethers.formatEther(balance)} POL`);
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+  // ── Mainnet guard ──
+  // This script deploys MockUSDC and a mock oracle, both of which carry
+  // "NEVER deploy this to mainnet" in their source. Polygon mainnet is
+  // configured in hardhat.config.js so that verification and future scripts
+  // can target it — not so that this script can. Going to mainnet means
+  // pointing at real USDC and a real MetricsConsumer first.
+  if (connection.networkName === "polygon") {
+    throw new Error(
+      "Refusing to run: this script deploys MockUSDC and MockMetricsOracle, " +
+        "which must never reach mainnet. Write a mainnet deploy script that " +
+        "uses real USDC and a real Chainlink MetricsConsumer instead."
+    );
+  }
 
   // ── 1. Deploy MockUSDC ──
   console.log("1. Deploying MockUSDC...");
@@ -52,13 +68,15 @@ async function main() {
   const campaignFactoryAddress = await campaignFactory.getAddress();
   console.log(`   ✓ CampaignFactory → ${campaignFactoryAddress}\n`);
 
-  // ── 5. Authorize CampaignFactory as minter ──
-  console.log("5. Authorizing CampaignFactory as minter...");
-const authTx = await reputationToken.authoriseMinter(
+  // ── 5. Register CampaignFactory on ReputationToken ──
+  // The factory auto-authorises each escrow it deploys as a reputation minter,
+  // so it must be registered as the factory on the ReputationToken first.
+  console.log("5. Registering CampaignFactory on ReputationToken...");
+  const factoryTx = await reputationToken.setCampaignFactory(
     campaignFactoryAddress
   );
-  await authTx.wait();
-  console.log("   ✓ Authorized\n");
+  await factoryTx.wait();
+  console.log("   ✓ Registered\n");
 
   // ── 6. Mint test USDC to deployer ──
   console.log("6. Minting 10,000 test USDC to deployer...");
@@ -70,7 +88,7 @@ const mintTx = await mockUSDC.faucet(
 
   // ── Save addresses ──
   const addresses = {
-    network: "baseSepolia",
+    network: connection.networkName,
     deployer: deployer.address,
     mockUSDC: usdcAddress,
     reputationToken: reputationTokenAddress,

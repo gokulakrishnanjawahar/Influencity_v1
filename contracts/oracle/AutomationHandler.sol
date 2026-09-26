@@ -3,9 +3,9 @@ pragma solidity ^0.8.24;
 
 import {AutomationCompatibleInterface} from "@chainlink/contracts/src/v0.8/automation/AutomationCompatible.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "../core/CampaignEscrow.sol";
+import "../interfaces/ICampaignEscrow.sol";
+import "../interfaces/IMetricsConsumer.sol";
 import "../libraries/MilestoneLib.sol";
-import "./MetricsConsumer.sol";
 
 /// @title AutomationHandler
 /// @notice Chainlink Automation upkeep contract.
@@ -20,7 +20,7 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
     // ─────────────────────────────────────────────
 
     /// @notice The MetricsConsumer contract that talks to Chainlink Functions
-    MetricsConsumer public metricsConsumer;
+    IMetricsConsumer public metricsConsumer;
 
     /// @notice How often (in seconds) to check each campaign for metric updates
     /// Default = 24 hours per PRD §5.1
@@ -37,14 +37,27 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
     /// @notice campaignId => CampaignSchedule
     mapping(uint256 => CampaignSchedule) public schedules;
 
-    /// @notice Array of all registered campaign IDs (for iteration in checkUpkeep)
+    /// @notice Campaign IDs currently being swept. Retired campaigns are removed
+    /// rather than skipped, so checkUpkeep's scan stays proportional to the number
+    /// of *live* campaigns instead of every campaign ever created.
     uint256[] public campaignIds;
+
+    /// @notice campaignId => its position in campaignIds, stored as index + 1 so
+    /// that zero can mean "not in the array".
+    mapping(uint256 => uint256) private campaignIdIndex;
 
     /// @notice Maximum number of campaigns checked per upkeep call (gas limit safety)
     uint256 public maxCampaignsPerUpkeep = 5;
 
     /// @notice Address allowed to register new campaigns (CampaignFactory)
     address public campaignFactory;
+
+    /// @notice The Chainlink Automation forwarder — the only address the registry
+    /// uses to call performUpkeep. While unset (address(0)) the upkeep stays
+    /// permissionless, which it must be before the upkeep is registered and the
+    /// forwarder address is known. Set it straight after registering: until then
+    /// anyone can trigger a sweep and spend the subscription's LINK.
+    address public forwarder;
 
     // ─────────────────────────────────────────────
     // Events
@@ -59,6 +72,8 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
         bytes32 requestId
     );
     event CheckIntervalUpdated(uint256 newInterval);
+    event ForwarderSet(address indexed forwarder);
+    event MetricCheckFailed(uint256 indexed campaignId, uint256 indexed milestoneIndex);
     event CampaignFactorySet(address indexed factory);
 
     // ─────────────────────────────────────────────
@@ -79,7 +94,7 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
 
     constructor(address _metricsConsumer) Ownable(msg.sender) {
         require(_metricsConsumer != address(0), "AutomationHandler: invalid consumer address");
-        metricsConsumer = MetricsConsumer(_metricsConsumer);
+        metricsConsumer = IMetricsConsumer(_metricsConsumer);
     }
 
     // ─────────────────────────────────────────────
@@ -95,7 +110,12 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
         address escrowAddress
     ) external onlyFactory {
         require(escrowAddress != address(0), "AutomationHandler: invalid escrow address");
-        require(!schedules[campaignId].active, "AutomationHandler: campaign already registered");
+        // Keyed on escrowAddress rather than `active` so a campaign that has been
+        // retired cannot be re-registered and start consuming LINK again.
+        require(
+            schedules[campaignId].escrowAddress == address(0),
+            "AutomationHandler: campaign already registered"
+        );
 
         schedules[campaignId] = CampaignSchedule({
             escrowAddress: escrowAddress,
@@ -104,6 +124,7 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
         });
 
         campaignIds.push(campaignId);
+        campaignIdIndex[campaignId] = campaignIds.length; // index + 1
         emit CampaignRegistered(campaignId, escrowAddress);
     }
 
@@ -119,7 +140,29 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
             "AutomationHandler: not authorized to deactivate"
         );
 
-        sched.active = false;
+        _deactivate(campaignId);
+    }
+
+    /// @notice Retires a campaign: stops it being swept and drops it out of the
+    /// scan list with a swap-and-pop.
+    function _deactivate(uint256 campaignId) internal {
+        schedules[campaignId].active = false;
+
+        uint256 indexPlusOne = campaignIdIndex[campaignId];
+        if (indexPlusOne != 0) {
+            uint256 index = indexPlusOne - 1;
+            uint256 lastIndex = campaignIds.length - 1;
+
+            if (index != lastIndex) {
+                uint256 movedId = campaignIds[lastIndex];
+                campaignIds[index] = movedId;
+                campaignIdIndex[movedId] = index + 1;
+            }
+
+            campaignIds.pop();
+            delete campaignIdIndex[campaignId];
+        }
+
         emit CampaignDeactivated(campaignId);
     }
 
@@ -174,6 +217,11 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
     /// For each campaign in the list, requests a metric verification for every
     /// pending milestone via the MetricsConsumer.
     function performUpkeep(bytes calldata performData) external override {
+        require(
+            forwarder == address(0) || msg.sender == forwarder,
+            "AutomationHandler: caller is not the upkeep forwarder"
+        );
+
         uint256[] memory dueCampaigns = abi.decode(performData, (uint256[]));
 
         for (uint256 i = 0; i < dueCampaigns.length; i++) {
@@ -199,7 +247,17 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
 
     /// @notice For a given campaign, requests a fresh metric for every PENDING milestone.
     function _triggerMetricChecks(uint256 campaignId, address escrowAddress) internal {
-        CampaignEscrow escrow = CampaignEscrow(escrowAddress);
+        ICampaignEscrow escrow = ICampaignEscrow(escrowAddress);
+
+        // A finalised campaign can never pay out again. Retire it from the sweep
+        // rather than paying LINK to re-check it forever — nothing else calls
+        // deactivateCampaign, so without this a completed campaign is checked
+        // every interval for the life of the upkeep.
+        if (escrow.isFinalized()) {
+            _deactivate(campaignId);
+            return;
+        }
+
         uint256 milestoneCount = escrow.getMilestoneCount();
 
         for (uint256 i = 0; i < milestoneCount; i++) {
@@ -209,13 +267,17 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
             if (m.status != MilestoneLib.MilestoneStatus.PENDING) continue;
             if (bytes(m.contentId).length == 0) continue;
 
-            bytes32 requestId = metricsConsumer.requestMetric(
-                i,
-                uint8(m.platform),
-                m.contentId
-            );
-
-            emit MetricCheckTriggered(campaignId, i, requestId);
+            // One bad milestone must not abort the sweep. An unrecoverable
+            // request — an unset source script, an exhausted subscription —
+            // would otherwise revert performUpkeep and stall every other
+            // campaign in the batch behind it.
+            try metricsConsumer.requestMetric(escrowAddress, i, uint8(m.platform), m.contentId)
+                returns (bytes32 requestId)
+            {
+                emit MetricCheckTriggered(campaignId, i, requestId);
+            } catch {
+                emit MetricCheckFailed(campaignId, i);
+            }
         }
     }
 
@@ -240,15 +302,39 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
         emit CampaignFactorySet(_factory);
     }
 
+    /// @notice Runs a metric check for one campaign immediately, ignoring the
+    /// interval. Owner-only.
+    ///
+    /// checkInterval has a one-hour floor, which makes a live demo — or any
+    /// situation where a creator has just submitted proof and everyone is
+    /// watching — impractical. This is a manual override, not part of the
+    /// automated path: Chainlink still drives performUpkeep on its own schedule.
+    function forceCheck(uint256 campaignId) external onlyOwner {
+        CampaignSchedule storage sched = schedules[campaignId];
+        require(sched.active, "AutomationHandler: campaign not active");
+
+        _triggerMetricChecks(campaignId, sched.escrowAddress);
+        sched.lastCheckedAt = block.timestamp;
+    }
+
+    /// @notice Restricts performUpkeep to the Chainlink Automation forwarder.
+    /// Call this once the upkeep is registered and its forwarder is known.
+    function setForwarder(address _forwarder) external onlyOwner {
+        forwarder = _forwarder;
+        emit ForwarderSet(_forwarder);
+    }
+
     function setMetricsConsumer(address _metricsConsumer) external onlyOwner {
         require(_metricsConsumer != address(0), "AutomationHandler: invalid consumer address");
-        metricsConsumer = MetricsConsumer(_metricsConsumer);
+        metricsConsumer = IMetricsConsumer(_metricsConsumer);
     }
 
     // ─────────────────────────────────────────────
     // View Functions
     // ─────────────────────────────────────────────
 
+    /// @notice Number of campaigns still in the sweep. Retired campaigns are
+    /// removed, so this counts live campaigns, not every one ever registered.
     function getRegisteredCampaignCount() external view returns (uint256) {
         return campaignIds.length;
     }

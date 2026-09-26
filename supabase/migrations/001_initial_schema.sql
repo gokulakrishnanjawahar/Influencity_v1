@@ -145,14 +145,17 @@ begin
 end;
 $$ language plpgsql;
 
+drop trigger if exists update_users_updated_at on users;
 create trigger update_users_updated_at
   before update on users
   for each row execute function update_updated_at();
 
+drop trigger if exists update_campaigns_updated_at on campaigns;
 create trigger update_campaigns_updated_at
   before update on campaigns
   for each row execute function update_updated_at();
 
+drop trigger if exists update_milestones_updated_at on milestones;
 create trigger update_milestones_updated_at
   before update on milestones
   for each row execute function update_updated_at();
@@ -171,26 +174,31 @@ alter table reputation_events enable row level security;
 alter table content_proofs    enable row level security;
 
 -- Users can read their own record
+drop policy if exists "Users can read own record" on users;
 create policy "Users can read own record"
   on users for select
   using (true);
 
 -- Campaigns are publicly readable
+drop policy if exists "Campaigns are publicly readable" on campaigns;
 create policy "Campaigns are publicly readable"
   on campaigns for select
   using (true);
 
 -- Milestones are publicly readable
+drop policy if exists "Milestones are publicly readable" on milestones;
 create policy "Milestones are publicly readable"
   on milestones for select
   using (true);
 
 -- Reputation events are publicly readable
+drop policy if exists "Reputation events are publicly readable" on reputation_events;
 create policy "Reputation events are publicly readable"
   on reputation_events for select
   using (true);
 
 -- Content proofs are publicly readable
+drop policy if exists "Content proofs are publicly readable" on content_proofs;
 create policy "Content proofs are publicly readable"
   on content_proofs for select
   using (true);

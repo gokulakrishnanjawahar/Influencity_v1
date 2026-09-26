@@ -6,18 +6,27 @@ import {
   ArrowLeft, ExternalLink, CheckCircle,
   XCircle, Clock, Lock, Upload,
   Activity, RefreshCw, Shield, Copy,
-  ArrowRight, Zap, AlertCircle,
+  ArrowRight, Zap, AlertCircle, Send,
+  Users, Ban,
 } from "lucide-react";
 import PageLayout from "@/components/layout/PageLayout";
-import WalletGuard from "@/components/wallet/WalletGuard";
+import { ConnectButton as RainbowConnectButton } from "@rainbow-me/rainbowkit";
 import StatusBadge from "@/components/shared/StatusBadge";
 import PlatformIcon from "@/components/shared/PlatformIcon";
 import ProgressBar from "@/components/shared/ProgressBar";
 import LoadingSpinner, { PageLoader } from "@/components/shared/LoadingSpinner";
-import { useCampaign } from "@/hooks/useCampaign";
+import {
+  useCampaign,
+  useCampaignApplications,
+  useApplyToCampaign,
+  useSelectCreator,
+  useCancelCampaign,
+} from "@/hooks/useCampaign";
+import { useSIWE } from "@/components/wallet/SIWEProvider";
 import { useMilestones } from "@/hooks/useMilestones";
 import { useIPFS } from "@/hooks/useIPFS";
 import { formatUSDC, formatDeadline, truncateAddress, timeUntil, milestoneProgress } from "@/lib/utils";
+import { explorerAddressUrl, EXPLORER_NAME, NETWORK_NAME } from "@/config/wagmi";
 import { toast } from "sonner";
 
 // ─────────────────────────────────────────────
@@ -257,6 +266,605 @@ function MilestoneCard({ milestone, index, escrowAddress, isCreator, onProofSubm
 }
 
 // ─────────────────────────────────────────────
+// APPLY PANEL — creator applies to an open campaign
+// ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// Connect prompt — stands in for ApplyPanel when no wallet is connected
+// ─────────────────────────────────────────────
+// The page itself is public so campaigns can be shared and read by anyone.
+// Applying needs a wallet, so the gate sits here, next to the action it guards,
+// rather than in front of the whole page.
+
+function ConnectToApplyPanel() {
+  return (
+    <div
+      style={{
+        background: SURFACE,
+        border: `1px solid ${BORDER}`,
+        borderRadius: 12,
+        padding: 16,
+      }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 700, color: TEXT, marginBottom: 6 }}>
+        Interested in this campaign?
+      </div>
+      <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.6, marginBottom: 14 }}>
+        Connect a wallet to apply. Your wallet is your identity here — there is
+        no username or password.
+      </p>
+
+      <RainbowConnectButton.Custom>
+        {({ openConnectModal }) => (
+          <motion.button
+            onClick={openConnectModal}
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.99 }}
+            style={{
+              width: "100%",
+              padding: "9px 12px",
+              borderRadius: 8,
+              background: TEXT,
+              color: "#000",
+              border: "none",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            Connect Wallet
+          </motion.button>
+        )}
+      </RainbowConnectButton.Custom>
+    </div>
+  );
+}
+
+function ApplyPanel({ campaignId, connectedAddress, applications }) {
+  const [open, setOpen] = useState(false);
+  const [pitch, setPitch] = useState("");
+  const [links, setLinks] = useState({
+    youtube: "",
+    twitch: "",
+    linkedin: "",
+    other: "",
+  });
+  const apply = useApplyToCampaign(campaignId);
+
+  const myApplication = applications.find(
+    (a) => a.creator_address?.toLowerCase() === connectedAddress?.toLowerCase()
+  );
+
+  const labelStyle = {
+    display: "block",
+    fontSize: 10,
+    color: VERY_MUTED,
+    marginBottom: 4,
+    fontWeight: 600,
+  };
+  const inputStyle = {
+    width: "100%",
+    padding: "8px 11px",
+    borderRadius: 8,
+    background: SURFACE2,
+    border: `1px solid ${BORDER}`,
+    color: TEXT,
+    fontSize: 12,
+    outline: "none",
+    boxSizing: "border-box",
+    fontFamily: "inherit",
+  };
+
+  if (myApplication) {
+    const statusColor =
+      myApplication.status === "selected"
+        ? SUCCESS
+        : myApplication.status === "rejected"
+        ? DANGER
+        : WARNING;
+    const statusText =
+      myApplication.status === "selected"
+        ? "You were selected"
+        : myApplication.status === "rejected"
+        ? "Not selected for this campaign"
+        : "Application under review";
+    return (
+      <div
+        style={{
+          padding: 18,
+          borderRadius: 12,
+          background: SURFACE,
+          border: `1px solid ${BORDER}`,
+        }}
+      >
+        <p
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: 1.5,
+            color: VERY_MUTED,
+            marginBottom: 10,
+          }}
+        >
+          Your application
+        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: statusColor,
+            }}
+          />
+          <span style={{ fontSize: 13, fontWeight: 700, color: statusColor }}>
+            {statusText}
+          </span>
+        </div>
+        {myApplication.pitch_message && (
+          <p style={{ fontSize: 11, color: MUTED, marginTop: 10, lineHeight: 1.6 }}>
+            “{myApplication.pitch_message}”
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  const handleSubmit = async () => {
+    if (!pitch.trim()) {
+      toast.error("Add a short pitch describing why you're a fit");
+      return;
+    }
+    const socialLinks = Object.fromEntries(
+      Object.entries(links).filter(([, v]) => v.trim())
+    );
+    try {
+      await apply.mutateAsync({
+        creatorAddress: connectedAddress,
+        pitchMessage: pitch.trim(),
+        socialLinks,
+      });
+      toast.success("Application submitted!");
+      setOpen(false);
+    } catch (e) {
+      toast.error(e.message || "Failed to submit application");
+    }
+  };
+
+  return (
+    <div
+      style={{
+        padding: 18,
+        borderRadius: 12,
+        background: SURFACE,
+        border: `1px solid ${BORDER}`,
+      }}
+    >
+      <p
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: 1.5,
+          color: VERY_MUTED,
+          marginBottom: 12,
+        }}
+      >
+        Interested?
+      </p>
+      {!open ? (
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          onClick={() => setOpen(true)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            width: "100%",
+            padding: "10px 14px",
+            borderRadius: 9,
+            background: TEXT,
+            color: "#000",
+            fontWeight: 700,
+            fontSize: 13,
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
+          <Send size={13} /> Apply to this campaign
+        </motion.button>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div>
+            <label style={labelStyle}>Your pitch</label>
+            <textarea
+              value={pitch}
+              onChange={(e) => setPitch(e.target.value)}
+              rows={3}
+              placeholder="Why are you a great fit for this campaign?"
+              style={{ ...inputStyle, resize: "vertical" }}
+            />
+          </div>
+          {[
+            { key: "youtube", label: "YouTube", ph: "https://youtube.com/@you" },
+            { key: "twitch", label: "Twitch", ph: "https://twitch.tv/you" },
+            { key: "linkedin", label: "LinkedIn", ph: "https://linkedin.com/in/you" },
+            { key: "other", label: "Other links", ph: "Instagram, X, portfolio…" },
+          ].map(({ key, label, ph }) => (
+            <div key={key}>
+              <label style={labelStyle}>{label}</label>
+              <input
+                value={links[key]}
+                onChange={(e) =>
+                  setLinks((p) => ({ ...p, [key]: e.target.value }))
+                }
+                placeholder={ph}
+                style={inputStyle}
+              />
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+            <button
+              onClick={() => setOpen(false)}
+              style={{
+                flex: 1,
+                padding: "9px",
+                borderRadius: 8,
+                background: "transparent",
+                border: `1px solid ${BORDER}`,
+                color: MUTED,
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={apply.isPending}
+              style={{
+                flex: 2,
+                padding: "9px",
+                borderRadius: 8,
+                background: TEXT,
+                color: "#000",
+                fontWeight: 700,
+                fontSize: 12,
+                border: "none",
+                cursor: "pointer",
+                opacity: apply.isPending ? 0.6 : 1,
+              }}
+            >
+              {apply.isPending ? "Submitting…" : "Submit application"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// APPLICANTS PANEL — brand reviews creator applications + selects one
+// ─────────────────────────────────────────────
+const APP_STATUS_STYLES = {
+  pending:   { color: WARNING, label: "Pending review" },
+  selected:  { color: SUCCESS, label: "Selected" },
+  rejected:  { color: DANGER,  label: "Rejected" },
+  withdrawn: { color: MUTED,   label: "Withdrawn" },
+};
+
+function ApplicantsPanel({
+  campaignId,
+  campaignIdOnchain,
+  campaignStatus,
+  brandAddress,
+  applications,
+}) {
+  const select = useSelectCreator(campaignId);
+
+  const copyApplicant = (addr) => {
+    navigator.clipboard.writeText(addr);
+    toast.success("Address copied");
+  };
+
+  const handleSelect = async (creatorAddress) => {
+    const ok = window.confirm(
+      `Select ${creatorAddress.slice(0, 6)}…${creatorAddress.slice(
+        -4
+      )} as the creator?\n\nThis forms a binding agreement on-chain and rejects all other applicants. It cannot be undone.`
+    );
+    if (!ok) return;
+    try {
+      await select.mutateAsync({ campaignIdOnchain, brandAddress, creatorAddress });
+      toast.success("Creator selected — agreement formed!");
+    } catch (e) {
+      toast.error(e.message || "Failed to select creator");
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Users size={14} style={{ color: MUTED }} />
+          <p style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>
+            Applicants{" "}
+            <span style={{ color: VERY_MUTED, fontWeight: 500 }}>
+              ({applications.length})
+            </span>
+          </p>
+        </div>
+        {campaignStatus === "open" && (
+          <span style={{ fontSize: 11, color: VERY_MUTED }}>
+            Pick one to form the agreement
+          </span>
+        )}
+      </div>
+
+      {applications.length === 0 ? (
+        <div
+          style={{
+            padding: "32px 20px",
+            textAlign: "center",
+            borderRadius: 12,
+            background: SURFACE,
+            border: `1px solid ${BORDER}`,
+          }}
+        >
+          <Users size={22} style={{ color: VERY_MUTED, marginBottom: 10 }} />
+          <p style={{ fontSize: 12, color: MUTED }}>
+            No applications yet. Share the listing to attract creators.
+          </p>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {applications.map((app, i) => {
+            const statusStyle =
+              APP_STATUS_STYLES[app.status] || APP_STATUS_STYLES.pending;
+            const links = Object.entries(app.social_links || {}).filter(
+              ([, v]) => v
+            );
+            return (
+              <motion.div
+                key={app.id || i}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.05, duration: 0.3 }}
+                style={{
+                  padding: 16,
+                  borderRadius: 12,
+                  background: SURFACE,
+                  border: `1px solid ${
+                    app.status === "selected"
+                      ? "rgba(74,222,128,0.3)"
+                      : BORDER
+                  }`,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    gap: 12,
+                    marginBottom: 10,
+                  }}
+                >
+                  <div>
+                    <button
+                      onClick={() => copyApplicant(app.creator_address)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        color: TEXT,
+                        fontSize: 12,
+                        fontFamily: "monospace",
+                        fontWeight: 600,
+                        padding: 0,
+                      }}
+                    >
+                      {truncateAddress(app.creator_address)}
+                      <Copy size={9} style={{ color: VERY_MUTED }} />
+                    </button>
+                    <p style={{ fontSize: 10, color: VERY_MUTED, marginTop: 3 }}>
+                      Applied {new Date(app.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <span
+                    style={{
+                      padding: "3px 9px",
+                      borderRadius: 100,
+                      fontSize: 10,
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.6,
+                      color: statusStyle.color,
+                      background: `${statusStyle.color}1a`,
+                      border: `1px solid ${statusStyle.color}33`,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {statusStyle.label}
+                  </span>
+                </div>
+
+                {app.pitch_message && (
+                  <p
+                    style={{
+                      fontSize: 12,
+                      color: MUTED,
+                      lineHeight: 1.6,
+                      marginBottom: 10,
+                      padding: "10px 12px",
+                      borderRadius: 8,
+                      background: SURFACE2,
+                      border: `1px solid ${BORDER}`,
+                    }}
+                  >
+                    “{app.pitch_message}”
+                  </p>
+                )}
+
+                {links.length > 0 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 6,
+                      marginBottom: campaignStatus === "open" && app.status === "pending" ? 12 : 0,
+                    }}
+                  >
+                    {links.map(([k, v]) => (
+                      <a
+                        key={k}
+                        href={v.startsWith("http") ? v : `https://${v}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 5,
+                          padding: "4px 9px",
+                          borderRadius: 6,
+                          background: SURFACE2,
+                          border: `1px solid ${BORDER}`,
+                          color: MUTED,
+                          fontSize: 11,
+                          textDecoration: "none",
+                          textTransform: "capitalize",
+                        }}
+                      >
+                        <ExternalLink size={9} /> {k}
+                      </a>
+                    ))}
+                  </div>
+                )}
+
+                {campaignStatus === "open" && app.status === "pending" && (
+                  <motion.button
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
+                    onClick={() => handleSelect(app.creator_address)}
+                    disabled={select.isPending}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 6,
+                      width: "100%",
+                      padding: "9px 14px",
+                      borderRadius: 9,
+                      background: TEXT,
+                      color: "#000",
+                      fontWeight: 700,
+                      fontSize: 12,
+                      border: "none",
+                      cursor: "pointer",
+                      opacity: select.isPending ? 0.6 : 1,
+                    }}
+                  >
+                    <CheckCircle size={12} />
+                    {select.isPending ? "Selecting…" : "Select this creator"}
+                  </motion.button>
+                )}
+              </motion.div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// WITHDRAW PANEL — brand cancels an open campaign and refunds USDC
+// ─────────────────────────────────────────────
+function WithdrawPanel({ campaignId, escrowAddress, brandAddress }) {
+  const cancel = useCancelCampaign(campaignId);
+
+  const handleCancel = async () => {
+    const ok = window.confirm(
+      "Withdraw this campaign? Your locked USDC will be refunded in full to your wallet, and all pending applications will be closed.\n\nThis cannot be undone."
+    );
+    if (!ok) return;
+    try {
+      await cancel.mutateAsync({ escrowAddress, brandAddress });
+      toast.success("Campaign withdrawn — USDC refunded to your wallet");
+    } catch (e) {
+      toast.error(e.message || "Failed to withdraw campaign");
+    }
+  };
+
+  return (
+    <div
+      style={{
+        padding: 18,
+        borderRadius: 12,
+        background: SURFACE,
+        border: `1px solid rgba(248,113,113,0.2)`,
+      }}
+    >
+      <p
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: 1.5,
+          color: DANGER,
+          marginBottom: 10,
+        }}
+      >
+        Withdraw campaign
+      </p>
+      <p style={{ fontSize: 11, color: MUTED, lineHeight: 1.6, marginBottom: 14 }}>
+        Not happy with any applicant? You can withdraw while the campaign is
+        still open — your locked USDC is refunded in full.
+      </p>
+      <motion.button
+        whileHover={{ scale: 1.02 }}
+        whileTap={{ scale: 0.98 }}
+        onClick={handleCancel}
+        disabled={cancel.isPending}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 6,
+          width: "100%",
+          padding: "9px 14px",
+          borderRadius: 9,
+          background: "transparent",
+          color: DANGER,
+          fontWeight: 700,
+          fontSize: 12,
+          border: `1px solid rgba(248,113,113,0.4)`,
+          cursor: "pointer",
+          opacity: cancel.isPending ? 0.6 : 1,
+        }}
+      >
+        <Ban size={12} />
+        {cancel.isPending ? "Withdrawing…" : "Withdraw & refund"}
+      </motion.button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // MAIN PAGE
 // ─────────────────────────────────────────────
 export default function CampaignDetail() {
@@ -267,7 +875,9 @@ export default function CampaignDetail() {
   const [proofSubmitting, setProofSubmitting] = useState(false);
 
   const { data: campaign, isLoading, error, refetch } = useCampaign(id);
+  const { data: applications = [] } = useCampaignApplications(id);
   const { getGatewayUrl } = useIPFS();
+  const { ensureAuth, getAuthHeaders } = useSIWE();
 
   const milestones = campaign?.milestones || [];
   const isCreator = campaign?.creator_address?.toLowerCase() === connectedAddress?.toLowerCase();
@@ -285,10 +895,11 @@ export default function CampaignDetail() {
   const releasedUSDC = parseFloat(campaign?.total_released_usdc || 0);
 
   const handleProofSubmit = async ({ milestoneIndex, contentUrl, contentId, platform }) => {
+    await ensureAuth();
     const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
     const res = await fetch(`${API_BASE}/campaigns/${id}/proof`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...getAuthHeaders() },
       body: JSON.stringify({
         creatorAddress: connectedAddress,
         milestoneIndex,
@@ -297,7 +908,10 @@ export default function CampaignDetail() {
         contentId,
       }),
     });
-    if (!res.ok) throw new Error("Failed to submit proof");
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.error || "Failed to submit proof");
+    }
     const data = await res.json();
     refetch();
     return data;
@@ -335,9 +949,10 @@ export default function CampaignDetail() {
     );
   }
 
+  // Readable without a wallet — a campaign page is the thing people share.
+  // Every action below is still gated on a connected address.
   return (
-    <WalletGuard>
-      <PageLayout>
+    <PageLayout>
         <div style={{ maxWidth: 1000, margin: "0 auto", padding: "32px 0 80px" }}>
 
           {/* Back button */}
@@ -359,8 +974,9 @@ export default function CampaignDetail() {
           {/* Header */}
           <div
             style={{
-              display: "grid", gridTemplateColumns: "1fr auto",
-              gap: 20, alignItems: "flex-start", marginBottom: 32,
+              display: "flex", flexWrap: "wrap",
+              gap: 20, alignItems: "flex-start", justifyContent: "space-between",
+              marginBottom: 32,
             }}
           >
             <div>
@@ -396,10 +1012,10 @@ export default function CampaignDetail() {
                   </button>
                 )}
 
-                {/* FIX 4: Restored missing opening <a> tag for Basescan link */}
+                {/* FIX 4: Restored missing opening <a> tag for explorer link */}
                 {campaign.contract_address && (
                   <a
-                    href={`https://sepolia.basescan.org/address/${campaign.contract_address}`}
+                    href={explorerAddressUrl(campaign.contract_address)}
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{
@@ -408,7 +1024,7 @@ export default function CampaignDetail() {
                     }}
                   >
                     <ExternalLink size={10} />
-                    View on Basescan
+                    View on {EXPLORER_NAME}
                   </a>
                 )}
 
@@ -447,7 +1063,7 @@ export default function CampaignDetail() {
           </div>
 
           {/* Stats row — FIX 3 applied: totalUSDC passed directly, not * 1_000_000 */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 32 }}>
+          <div className="r-grid-4" style={{ gap: 12, marginBottom: 32 }}>
             {[
               { label: "Total locked", value: `$${formatUSDC(totalUSDC)}`, icon: Lock },
               {
@@ -497,10 +1113,20 @@ export default function CampaignDetail() {
           </div>
 
           {/* Main grid */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 20 }}>
+          <div className="r-grid-sidebar">
 
-            {/* Left — milestones */}
+            {/* Left — applicants (brand only) + milestones */}
             <div>
+              {isBrand && (
+                <ApplicantsPanel
+                  campaignId={id}
+                  campaignIdOnchain={campaign.campaign_id_onchain}
+                  campaignStatus={campaign.status}
+                  brandAddress={connectedAddress}
+                  applications={applications}
+                />
+              )}
+
               <div
                 style={{
                   display: "flex", alignItems: "center",
@@ -552,6 +1178,29 @@ export default function CampaignDetail() {
             {/* Right — info panel */}
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 
+              {/* Apply — shown to creators on open campaigns */}
+              {campaign.status === "open" && !isBrand && connectedAddress && (
+                <ApplyPanel
+                  campaignId={id}
+                  connectedAddress={connectedAddress}
+                  applications={applications}
+                />
+              )}
+
+              {/* No wallet — invite them to connect rather than hiding the page */}
+              {campaign.status === "open" && !connectedAddress && (
+                <ConnectToApplyPanel />
+              )}
+
+              {/* Withdraw — brand on open campaigns */}
+              {campaign.status === "open" && isBrand && (
+                <WithdrawPanel
+                  campaignId={id}
+                  escrowAddress={campaign.contract_address}
+                  brandAddress={connectedAddress}
+                />
+              )}
+
               {/* Parties */}
               <motion.div
                 initial={{ opacity: 0, x: 12 }}
@@ -595,17 +1244,23 @@ export default function CampaignDetail() {
                         </span>
                       )}
                     </div>
-                    <button
-                      onClick={() => copyAddress(addr)}
-                      style={{
-                        display: "flex", alignItems: "center", gap: 5,
-                        background: "none", border: "none", cursor: "pointer",
-                        color: MUTED, fontSize: 11, fontFamily: "monospace", padding: 0,
-                      }}
-                    >
-                      {truncateAddress(addr)}
-                      <Copy size={9} />
-                    </button>
+                    {addr ? (
+                      <button
+                        onClick={() => copyAddress(addr)}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 5,
+                          background: "none", border: "none", cursor: "pointer",
+                          color: MUTED, fontSize: 11, fontFamily: "monospace", padding: 0,
+                        }}
+                      >
+                        {truncateAddress(addr)}
+                        <Copy size={9} />
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: 11, color: VERY_MUTED, fontStyle: "italic" }}>
+                        Not assigned yet
+                      </span>
+                    )}
                   </div>
                 ))}
               </motion.div>
@@ -673,7 +1328,7 @@ export default function CampaignDetail() {
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {[
                     { label: "Oracle", value: "Chainlink Functions" },
-                    { label: "Network", value: "Base Sepolia" },
+                    { label: "Network", value: NETWORK_NAME },
                     { label: "Automation", value: "Chainlink Upkeep" },
                     { label: "Storage", value: "IPFS + Filecoin" },
                   ].map(({ label, value }) => (
@@ -708,7 +1363,6 @@ export default function CampaignDetail() {
             </div>
           </div>
         </div>
-      </PageLayout>
-    </WalletGuard>
+    </PageLayout>
   );
 }
