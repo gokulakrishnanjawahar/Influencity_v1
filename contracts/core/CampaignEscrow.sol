@@ -4,15 +4,23 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../libraries/MilestoneLib.sol";
 import "../interfaces/IReputationToken.sol";
 
 /// @title CampaignEscrow
 /// @notice Holds USDC funds for a single influencer campaign.
-/// Releases tranches automatically when oracle-verified milestones are met.
-/// Returns funds to brand if milestones fail or campaign ends with remainder.
+/// Credits tranches to the creator when oracle-verified milestones are met,
+/// and credits the brand for failed milestones and any unallocated remainder.
+///
+/// Payouts are pull-based: settling a milestone only records who is owed what,
+/// and each party collects with withdraw(). USDC can blacklist addresses, so a
+/// direct transfer to a blacklisted creator or brand would revert — inside the
+/// oracle callback, or inside finalizeCampaign — and strand everyone else's
+/// funds with it. The contract only ever sends USDC to the account calling it.
 contract CampaignEscrow is ReentrancyGuard, Ownable {
     using MilestoneLib for MilestoneLib.Milestone;
+    using SafeERC20 for IERC20;
 
     // ─────────────────────────────────────────────
     // State Variables
@@ -52,6 +60,13 @@ contract CampaignEscrow is ReentrancyGuard, Ownable {
     /// @notice Whether the campaign was cancelled by the brand before a creator was assigned
     bool public isCancelled;
 
+    /// @notice USDC each account can collect with withdraw()
+    mapping(address => uint256) public withdrawable;
+
+    /// @notice Sum of every withdrawable balance — USDC already owed to someone
+    /// and therefore not part of the remainder returned at finalization
+    uint256 public totalWithdrawable;
+
     /// @notice Array of all milestones for this campaign
     MilestoneLib.Milestone[] public milestones;
 
@@ -90,10 +105,25 @@ contract CampaignEscrow is ReentrancyGuard, Ownable {
         uint256 trancheReleased
     );
 
+    /// @notice trancheRefunded is credited to the brand's withdrawable balance
     event MilestoneFailed(
         uint256 indexed campaignId,
         uint256 indexed milestoneIndex,
         uint256 trancheRefunded
+    );
+
+    event ProofSubmitted(
+        uint256 indexed campaignId,
+        uint256 indexed milestoneIndex,
+        string contentId,
+        string channelId,
+        string ipfsProofHash
+    );
+
+    event Withdrawn(
+        address indexed account,
+        address indexed to,
+        uint256 amount
     );
 
     event MetricVerified(
@@ -194,8 +224,7 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
             );
         }
 
-        bool success = usdc.transferFrom(msg.sender, address(this), amount);
-        require(success, "CampaignEscrow: USDC transfer failed");
+        usdc.safeTransferFrom(msg.sender, address(this), amount);
 
         totalDeposit = amount;
         emit CampaignFunded(campaignId, amount);
@@ -208,8 +237,7 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
         MilestoneLib.MetricType _metricType,
         uint256 _threshold,
         uint256 _trancheAmount,
-        uint256 _deadline,
-        string memory _contentId
+        uint256 _deadline
     ) external onlyOwner notFinalized {
         require(
             milestones.length < MAX_MILESTONES,
@@ -218,6 +246,10 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
         require(
             MilestoneLib.isValidMilestone(_threshold, _trancheAmount, _deadline),
             "CampaignEscrow: invalid milestone parameters"
+        );
+        require(
+            MilestoneLib.isSupportedMetric(_platform, _metricType),
+            "CampaignEscrow: metric not supported on platform"
         );
 
         // If deposit already made, ensure new milestone does not exceed it
@@ -235,7 +267,8 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
             threshold: _threshold,
             trancheAmount: _trancheAmount,
             deadline: _deadline,
-            contentId: _contentId,
+            contentId: "",
+            channelId: "",
             ipfsProofHash: "",
             status: MilestoneLib.MilestoneStatus.PENDING
         }));
@@ -268,21 +301,46 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
         emit CreatorAssigned(campaignId, _creator);
     }
 
-    /// @notice Creator submits IPFS proof hash for a specific milestone
-    function submitProof(uint256 milestoneIndex, string memory _ipfsProofHash) external notFinalized {
+    /// @notice Creator names the content the oracle should measure for a milestone.
+    /// @param _contentId     Platform content ID (YouTube video ID, Twitch clip ID…)
+    /// @param _channelId     The creator's channel on that platform. The oracle
+    ///                       only accepts the reading if the content belongs to
+    ///                       this channel and the channel names the creator's wallet.
+    /// @param _ipfsProofHash CID of the proof record pinned to IPFS
+    /// @dev Content can be set once. Allowing it to change would let a creator
+    /// swap in whichever video happened to perform best after the fact.
+    function submitProof(
+        uint256 milestoneIndex,
+        string memory _contentId,
+        string memory _channelId,
+        string memory _ipfsProofHash
+    ) external notFinalized {
         require(msg.sender == creator, "CampaignEscrow: caller is not creator");
         require(milestoneIndex < milestones.length, "CampaignEscrow: invalid milestone index");
+
+        MilestoneLib.Milestone storage milestone = milestones[milestoneIndex];
+
         require(
-            milestones[milestoneIndex].status == MilestoneLib.MilestoneStatus.PENDING,
+            milestone.status == MilestoneLib.MilestoneStatus.PENDING,
             "CampaignEscrow: milestone not pending"
         );
+        require(bytes(_contentId).length > 0, "CampaignEscrow: content ID required");
+        require(bytes(_channelId).length > 0, "CampaignEscrow: channel ID required");
         require(bytes(_ipfsProofHash).length > 0, "CampaignEscrow: proof hash required");
         require(
-            !MilestoneLib.isExpired(milestones[milestoneIndex]),
+            bytes(milestone.contentId).length == 0,
+            "CampaignEscrow: proof already submitted"
+        );
+        require(
+            !MilestoneLib.isPastDeadline(milestone),
             "CampaignEscrow: milestone deadline passed"
         );
 
-        milestones[milestoneIndex].ipfsProofHash = _ipfsProofHash;
+        milestone.contentId = _contentId;
+        milestone.channelId = _channelId;
+        milestone.ipfsProofHash = _ipfsProofHash;
+
+        emit ProofSubmitted(campaignId, milestoneIndex, _contentId, _channelId, _ipfsProofHash);
     }
 
     // ─────────────────────────────────────────────
@@ -290,7 +348,8 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
     // ─────────────────────────────────────────────
 
     /// @notice Called by MetricsConsumer with the verified metric value from Chainlink.
-    /// Compares against threshold — releases tranche or marks pending.
+    /// Compares against threshold — credits the tranche, fails the milestone once
+    /// the grace window has closed, or leaves it pending for the next check.
     /// @param milestoneIndex Index of the milestone being verified
     /// @param reportedValue  The verified metric value from the oracle
     function receiveVerifiedMetric(
@@ -306,11 +365,15 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
             milestone.status == MilestoneLib.MilestoneStatus.PENDING,
             "CampaignEscrow: milestone already resolved"
         );
+        require(
+            bytes(milestone.contentId).length > 0,
+            "CampaignEscrow: no content submitted"
+        );
 
         emit MetricVerified(campaignId, milestoneIndex, reportedValue);
 
         if (MilestoneLib.isThresholdMet(milestone, reportedValue)) {
-            _releaseTranche(milestoneIndex);
+            _releaseTranche(milestoneIndex, reportedValue);
         } else if (MilestoneLib.isExpired(milestone)) {
             _failMilestone(milestoneIndex);
         }
@@ -321,40 +384,43 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
     // Internal Logic
     // ─────────────────────────────────────────────
 
-    /// @notice Releases the tranche to the creator and mints a ReputationToken
-    function _releaseTranche(uint256 milestoneIndex) internal {
+    /// @notice Credits the tranche to the creator and mints a ReputationToken
+    function _releaseTranche(uint256 milestoneIndex, uint256 reportedValue) internal {
         MilestoneLib.Milestone storage milestone = milestones[milestoneIndex];
 
         milestone.status = MilestoneLib.MilestoneStatus.MET;
         totalReleased += milestone.trancheAmount;
+        _credit(creator, milestone.trancheAmount);
 
-        // Transfer USDC tranche to creator
-        bool success = usdc.transfer(creator, milestone.trancheAmount);
-        require(success, "CampaignEscrow: USDC transfer to creator failed");
-
-        // Mint reputation token to creator
-        // Token ID is derived from milestone index — can be mapped to tiers in ReputationToken
-        reputationToken.mint(creator, milestoneIndex, campaignId);
+        reputationToken.mint(
+            creator,
+            milestoneIndex,
+            campaignId,
+            brand,
+            milestone.trancheAmount
+        );
 
         emit MilestoneMet(
             campaignId,
             milestoneIndex,
-            milestone.threshold,
+            reportedValue,
             milestone.trancheAmount
         );
     }
 
-    /// @notice Marks milestone as failed and returns tranche to brand
+    /// @notice Marks milestone as failed and credits its tranche back to the brand
     function _failMilestone(uint256 milestoneIndex) internal {
         MilestoneLib.Milestone storage milestone = milestones[milestoneIndex];
 
         milestone.status = MilestoneLib.MilestoneStatus.FAILED;
-
-        // Return this tranche to brand
-        bool success = usdc.transfer(brand, milestone.trancheAmount);
-        require(success, "CampaignEscrow: USDC refund to brand failed");
+        _credit(brand, milestone.trancheAmount);
 
         emit MilestoneFailed(campaignId, milestoneIndex, milestone.trancheAmount);
+    }
+
+    function _credit(address account, uint256 amount) internal {
+        withdrawable[account] += amount;
+        totalWithdrawable += amount;
     }
 
     /// @notice Calculates total USDC allocated across all milestones
@@ -368,15 +434,13 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
     // Campaign Finalization
     // ─────────────────────────────────────────────
 
-    /// @notice Finalizes the campaign — checks for expired pending milestones,
-    /// then returns any unallocated remainder to the brand.
-    /// Can be called by brand or owner after all deadlines have passed.
+    /// @notice Finalizes the campaign — fails expired pending milestones, then
+    /// credits any unallocated remainder to the brand.
+    /// @dev Callable by anyone. It moves no USDC out of the contract and can only
+    /// succeed once every milestone is settled, so there is nothing for a third
+    /// party to abuse — and a keeper or the creator can close out a campaign the
+    /// brand has abandoned.
     function finalizeCampaign() external nonReentrant notFinalized {
-        require(
-            msg.sender == brand || msg.sender == owner(),
-            "CampaignEscrow: not authorized to finalize"
-        );
-
         // Settle every outstanding milestone first. A pending milestone past its
         // deadline is failed and refunded here; one that is still live blocks
         // finalization outright.
@@ -396,11 +460,11 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
             }
         }
 
-        // Return remainder balance to brand
-        uint256 remainder = usdc.balanceOf(address(this));
+        // Credit the unallocated remainder to the brand. Balances already owed
+        // to someone are excluded — they stay put until withdrawn.
+        uint256 remainder = usdc.balanceOf(address(this)) - totalWithdrawable;
         if (remainder > 0) {
-            bool success = usdc.transfer(brand, remainder);
-            require(success, "CampaignEscrow: remainder refund failed");
+            _credit(brand, remainder);
         }
 
         isFinalized = true;
@@ -420,15 +484,36 @@ function deposit(uint256 amount) external onlyBrand notFinalized nonReentrant {
             "CampaignEscrow: creator already assigned, cannot cancel"
         );
 
-        uint256 refund = usdc.balanceOf(address(this));
-        if (refund > 0) {
-            bool success = usdc.transfer(brand, refund);
-            require(success, "CampaignEscrow: refund to brand failed");
-        }
-
         isCancelled = true;
         isFinalized = true;
+
+        // Paid directly rather than credited: the brand is the caller, so a
+        // failed transfer can only ever block the brand's own transaction.
+        uint256 refund = usdc.balanceOf(address(this)) - totalWithdrawable;
+        if (refund > 0) {
+            usdc.safeTransfer(brand, refund);
+        }
+
         emit CampaignCancelled(campaignId, refund);
+    }
+
+    // ─────────────────────────────────────────────
+    // Withdrawals
+    // ─────────────────────────────────────────────
+
+    /// @notice Collects the caller's withdrawable USDC.
+    /// @param to Where to send it. Usually the caller; a different address lets
+    ///           an account whose own address is blacklisted still recover funds.
+    function withdraw(address to) external nonReentrant {
+        require(to != address(0), "CampaignEscrow: invalid recipient");
+        uint256 amount = withdrawable[msg.sender];
+        require(amount > 0, "CampaignEscrow: nothing to withdraw");
+
+        withdrawable[msg.sender] = 0;
+        totalWithdrawable -= amount;
+        usdc.safeTransfer(to, amount);
+
+        emit Withdrawn(msg.sender, to, amount);
     }
 
     // ─────────────────────────────────────────────

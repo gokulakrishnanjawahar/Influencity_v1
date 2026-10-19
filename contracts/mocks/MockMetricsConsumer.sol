@@ -14,11 +14,7 @@ contract MockMetricsConsumer {
     /// @notice When true, every requestMetric call reverts
     bool public shouldRevert;
 
-    event MetricRequestReceived(
-        uint256 indexed milestoneIndex,
-        uint8 platform,
-        string contentId
-    );
+    event MetricRequestReceived(uint256 indexed milestoneIndex);
 
     function setShouldRevert(bool _shouldRevert) external {
         shouldRevert = _shouldRevert;
@@ -31,18 +27,14 @@ contract MockMetricsConsumer {
 
     function requestMetric(
         address escrowAddress,
-        uint256 milestoneIndex,
-        uint8 platform,
-        string memory contentId
+        uint256 milestoneIndex
     ) external returns (bytes32 requestId) {
         require(!shouldRevert, "MockMetricsConsumer: forced failure");
 
         requestCount++;
         lastEscrow = escrowAddress;
-        requestId = keccak256(
-            abi.encodePacked(milestoneIndex, platform, contentId, requestCount)
-        );
+        requestId = keccak256(abi.encodePacked(escrowAddress, milestoneIndex, requestCount));
 
-        emit MetricRequestReceived(milestoneIndex, platform, contentId);
+        emit MetricRequestReceived(milestoneIndex);
     }
 }

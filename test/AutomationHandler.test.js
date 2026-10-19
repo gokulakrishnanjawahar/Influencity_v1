@@ -31,6 +31,8 @@ describe("AutomationHandler", async () => {
   const METRIC_TYPE = 0;
   const THRESHOLD = 50_000;
   const CONTENT_ID = "dQw4w9WgXcQ";
+  const CHANNEL_ID = "UCuAXFkgsw1L7xaCfnd5JJOw";
+  const IPFS_PROOF = "bafybeiproof";
   const IPFS_BRIEF = "bafybeibriefhash";
   const USDC = (amount) => BigInt(amount) * 1_000_000n;
   const ONE_DAY = 24 * 60 * 60;
@@ -39,6 +41,8 @@ describe("AutomationHandler", async () => {
     const block = await ethers.provider.getBlock("latest");
     return block.timestamp + secondsFromNow;
   }
+
+  const GRACE_PERIOD = 2 * 24 * 60 * 60; // MilestoneLib.GRACE_PERIOD
 
   async function advanceTime(seconds) {
     await ethers.provider.send("evm_increaseTime", [seconds]);
@@ -82,7 +86,7 @@ describe("AutomationHandler", async () => {
   }
 
   // Creates a campaign, funds it and binds the creator. Returns the escrow.
-  async function liveCampaign({ milestones = 1, deadlineIn = 86400 } = {}) {
+  async function liveCampaign({ milestones = 1, deadlineIn = 86400, withContent = true } = {}) {
     const deadline = await futureDeadline(deadlineIn);
     const tranche = USDC(100);
 
@@ -92,8 +96,7 @@ describe("AutomationHandler", async () => {
       Array(milestones).fill(METRIC_TYPE),
       Array(milestones).fill(THRESHOLD),
       Array(milestones).fill(tranche),
-      Array(milestones).fill(deadline),
-      Array(milestones).fill(CONTENT_ID)
+      Array(milestones).fill(deadline)
     );
     const receipt = await tx.wait();
     const event = receipt.logs.find(
@@ -107,6 +110,12 @@ describe("AutomationHandler", async () => {
     await usdc.connect(brand).approve(escrowAddress, total);
     await escrow.connect(brand).deposit(total);
     await factory.connect(brand).assignCreator(campaignId, creator.address);
+
+    if (withContent) {
+      for (let i = 0; i < milestones; i++) {
+        await escrow.connect(creator).submitProof(i, CONTENT_ID, CHANNEL_ID, IPFS_PROOF);
+      }
+    }
 
     return { escrow, escrowAddress, campaignId };
   }
@@ -200,6 +209,13 @@ describe("AutomationHandler", async () => {
       assert.equal(await mockConsumer.requestCount(), 3n);
     });
 
+    it("skips milestones the creator has not submitted content for", async () => {
+      const { campaignId } = await liveCampaign({ milestones: 2, withContent: false });
+      const before = await mockConsumer.requestCount();
+      await handler.forceCheck(campaignId);
+      assert.equal(await mockConsumer.requestCount(), before);
+    });
+
     it("skips milestones that are already resolved", async () => {
       const { escrowAddress } = await liveCampaign({ milestones: 2 });
 
@@ -268,7 +284,7 @@ describe("AutomationHandler", async () => {
       const { escrow, campaignId } = await liveCampaign({ deadlineIn: 60 });
 
       // Let the milestone expire, then settle the campaign.
-      await advanceTime(120);
+      await advanceTime(120 + GRACE_PERIOD); // past deadline and oracle grace window
       await escrow.connect(brand).finalizeCampaign();
 
       const [, performData] = await handler.checkUpkeep("0x");
@@ -298,7 +314,7 @@ describe("AutomationHandler", async () => {
       const { escrow } = await liveCampaign({ deadlineIn: 60 });
       assert.equal(await handler.getRegisteredCampaignCount(), 1n);
 
-      await advanceTime(120);
+      await advanceTime(120 + GRACE_PERIOD); // past deadline and oracle grace window
       await escrow.connect(brand).finalizeCampaign();
 
       const [, performData] = await handler.checkUpkeep("0x");
@@ -310,7 +326,7 @@ describe("AutomationHandler", async () => {
     it("refuses to re-register a retired campaign", async () => {
       const { escrow, escrowAddress, campaignId } = await liveCampaign({ deadlineIn: 60 });
 
-      await advanceTime(120);
+      await advanceTime(120 + GRACE_PERIOD); // past deadline and oracle grace window
       await escrow.connect(brand).finalizeCampaign();
       const [, performData] = await handler.checkUpkeep("0x");
       await handler.performUpkeep(performData);
@@ -327,7 +343,7 @@ describe("AutomationHandler", async () => {
       const second = await liveCampaign({ deadlineIn: 60 });  // 2 — will retire
       await liveCampaign();                          // 3
 
-      await advanceTime(120);
+      await advanceTime(120 + GRACE_PERIOD); // past deadline and oracle grace window
       await second.escrow.connect(brand).finalizeCampaign();
 
       const [, performData] = await handler.checkUpkeep("0x");

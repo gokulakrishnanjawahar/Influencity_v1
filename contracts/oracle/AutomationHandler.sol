@@ -271,7 +271,7 @@ contract AutomationHandler is AutomationCompatibleInterface, Ownable {
             // request — an unset source script, an exhausted subscription —
             // would otherwise revert performUpkeep and stall every other
             // campaign in the batch behind it.
-            try metricsConsumer.requestMetric(escrowAddress, i, uint8(m.platform), m.contentId)
+            try metricsConsumer.requestMetric(escrowAddress, i)
                 returns (bytes32 requestId)
             {
                 emit MetricCheckTriggered(campaignId, i, requestId);

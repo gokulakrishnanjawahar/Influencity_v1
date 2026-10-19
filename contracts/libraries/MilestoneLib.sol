@@ -3,6 +3,13 @@ pragma solidity ^0.8.24;
 
 library MilestoneLib {
 
+    /// @notice How long after a milestone's deadline the oracle may still post
+    /// a reading. Without it, an oracle that reports even a minute late lets the
+    /// deadline lapse and refunds the brand for a target the creator hit.
+    /// Readings taken in this window can include views gained after the
+    /// deadline; capping the window at two days bounds that slack.
+    uint256 internal constant GRACE_PERIOD = 2 days;
+
     // ─────────────────────────────────────────────
     // Enums
     // ─────────────────────────────────────────────
@@ -42,9 +49,15 @@ library MilestoneLib {
         uint256 trancheAmount;
         // Unix timestamp — if metric not met by this time, milestone fails
         uint256 deadline;
-        // Platform-specific content ID e.g. YouTube video ID or Twitch clip slug
+        // Platform-specific content ID e.g. YouTube video ID or Twitch clip slug.
+        // Set by the creator in submitProof — the content does not exist yet
+        // when the brand creates the campaign.
         string contentId;
-        // CID of the creator's content proof pinned to IPFS via web3.storage
+        // The creator's channel on the platform (YouTube channel ID, Twitch
+        // login, LinkedIn organisation URN). The oracle checks that contentId
+        // belongs to this channel and that the channel names the creator's wallet.
+        string channelId;
+        // CID of the creator's content proof pinned to IPFS
         string ipfsProofHash;
         // Current state of this milestone
         MilestoneStatus status;
@@ -54,11 +67,45 @@ library MilestoneLib {
     // Validation Helpers
     // ─────────────────────────────────────────────
 
-    /// @notice Checks if a milestone deadline has passed
-    /// @param milestone The milestone to check
-    /// @return true if the current time is past the deadline
-    function isExpired(Milestone storage milestone) internal view returns (bool) {
+    /// @notice Checks if the milestone's delivery deadline has passed. After
+    /// this the creator can no longer submit content.
+    function isPastDeadline(Milestone storage milestone) internal view returns (bool) {
         return block.timestamp > milestone.deadline;
+    }
+
+    /// @notice Checks if the oracle grace window after the deadline has closed.
+    /// Only then can an unmet milestone be failed and refunded to the brand.
+    function isExpired(Milestone storage milestone) internal view returns (bool) {
+        return block.timestamp > milestone.deadline + GRACE_PERIOD;
+    }
+
+    /// @notice Whether the oracle can actually measure this metric on this
+    /// platform. A milestone that cannot be measured can never pay out, so it is
+    /// rejected at creation instead of failing silently at its deadline.
+    function isSupportedMetric(Platform platform, MetricType metricType)
+        internal
+        pure
+        returns (bool)
+    {
+        if (platform == Platform.YOUTUBE) {
+            return metricType == MetricType.VIEWS || metricType == MetricType.FOLLOWERS;
+        }
+        if (platform == Platform.TWITCH) {
+            return metricType == MetricType.VIEWS
+                || metricType == MetricType.CONCURRENT_VIEWERS
+                || metricType == MetricType.FOLLOWERS;
+        }
+        // LINKEDIN
+        return metricType == MetricType.VIEWS || metricType == MetricType.CLICKS;
+    }
+
+    /// @notice The metric name passed to the Chainlink Functions scripts
+    function metricTypeName(MetricType metricType) internal pure returns (string memory) {
+        if (metricType == MetricType.VIEWS) return "VIEWS";
+        if (metricType == MetricType.CLICKS) return "CLICKS";
+        if (metricType == MetricType.FOLLOWERS) return "FOLLOWERS";
+        if (metricType == MetricType.WATCH_TIME) return "WATCH_TIME";
+        return "CONCURRENT_VIEWERS";
     }
 
     /// @notice Validates that a milestone's core fields are properly set at creation time

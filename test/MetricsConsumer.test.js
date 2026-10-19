@@ -34,7 +34,12 @@ describe("MetricsConsumer", async () => {
   const METRIC_VIEWS = 0;
   const THRESHOLD = 50_000;
   const TRANCHE = 100_000_000n; // 100 USDC
+  const PLATFORM_TWITCH = 1;
+  const METRIC_FOLLOWERS = 2;
   const CONTENT_ID = "dQw4w9WgXcQ";
+  const CHANNEL_ID = "UCuAXFkgsw1L7xaCfnd5JJOw";
+  const TWITCH_LOGIN = "somestreamer";
+  const IPFS_PROOF = "bafybeiproof";
   const IPFS_BRIEF = "bafybeibriefhash";
   const SUB_ID = 1;
   const DON_ID = "0x66756e2d706f6cygon0000000000000000000000000000000000000000000000";
@@ -88,24 +93,30 @@ describe("MetricsConsumer", async () => {
 
     await usdc.connect(brand).faucet(1000_000_000n);
 
-    // One funded, creator-bound campaign with a single pending milestone.
+    // One funded, creator-bound campaign with three pending milestones:
+    //   0 — YouTube views, content submitted (the one most tests use)
+    //   1 — Twitch followers, content submitted, no Twitch script configured
+    //   2 — YouTube views, no content submitted yet
+    const deadline = await futureDeadline();
     const tx = await factory.connect(brand).createCampaign(
       IPFS_BRIEF,
-      [PLATFORM_YOUTUBE],
-      [METRIC_VIEWS],
-      [THRESHOLD],
-      [TRANCHE],
-      [await futureDeadline()],
-      [CONTENT_ID]
+      [PLATFORM_YOUTUBE, PLATFORM_TWITCH, PLATFORM_YOUTUBE],
+      [METRIC_VIEWS, METRIC_FOLLOWERS, METRIC_VIEWS],
+      [THRESHOLD, THRESHOLD, THRESHOLD],
+      [TRANCHE, TRANCHE, TRANCHE],
+      [deadline, deadline, deadline]
     );
     const receipt = await tx.wait();
     const event = receipt.logs.find((log) => log.fragment?.name === "CampaignCreated");
     escrowAddress = event.args.escrowAddress;
     escrow = await ethers.getContractAt("CampaignEscrow", escrowAddress);
 
-    await usdc.connect(brand).approve(escrowAddress, TRANCHE);
-    await escrow.connect(brand).deposit(TRANCHE);
+    await usdc.connect(brand).approve(escrowAddress, 3n * TRANCHE);
+    await escrow.connect(brand).deposit(3n * TRANCHE);
     await factory.connect(brand).assignCreator(event.args.campaignId, creator.address);
+
+    await escrow.connect(creator).submitProof(0, CONTENT_ID, CHANNEL_ID, IPFS_PROOF);
+    await escrow.connect(creator).submitProof(1, TWITCH_LOGIN, TWITCH_LOGIN, IPFS_PROOF);
   }
 
   // Chainlink allocates a fixed callbackGasLimit to the callback. Tests must do
@@ -122,10 +133,8 @@ describe("MetricsConsumer", async () => {
   }
 
   // Places a request and returns its id, read back from the emitted event.
-  async function requestMetric() {
-    const tx = await consumer.requestMetric(
-      escrowAddress, 0, PLATFORM_YOUTUBE, CONTENT_ID
-    );
+  async function requestMetric(milestoneIndex = 0) {
+    const tx = await consumer.requestMetric(escrowAddress, milestoneIndex);
     const receipt = await tx.wait();
     const event = receipt.logs.find(
       (log) => log.fragment && log.fragment.name === "MetricRequested"
@@ -146,24 +155,38 @@ describe("MetricsConsumer", async () => {
 
     it("rejects a request for an unauthorised escrow", async () => {
       await assert.rejects(
-        consumer.requestMetric(other.address, 0, PLATFORM_YOUTUBE, CONTENT_ID),
+        consumer.requestMetric(other.address, 0),
         /escrow not authorised/
       );
     });
 
     it("rejects a request from an unauthorised caller", async () => {
       await assert.rejects(
-        consumer.connect(other).requestMetric(
-          escrowAddress, 0, PLATFORM_YOUTUBE, CONTENT_ID
-        ),
+        consumer.connect(other).requestMetric(escrowAddress, 0),
         /not an authorised escrow or automation handler/
       );
     });
 
     it("rejects a platform with no source code configured", async () => {
       await assert.rejects(
-        consumer.requestMetric(escrowAddress, 0, 1 /* TWITCH */, CONTENT_ID),
+        consumer.requestMetric(escrowAddress, 1 /* Twitch milestone */),
         /source code not set for platform/
+      );
+    });
+
+    it("rejects a request before the creator has submitted content", async () => {
+      await assert.rejects(
+        consumer.requestMetric(escrowAddress, 2),
+        /no content submitted/
+      );
+    });
+
+    it("rejects a request for a milestone that is already resolved", async () => {
+      const requestId = await requestMetric();
+      await fulfill(requestId, encodeUint(75_000), "0x");
+      await assert.rejects(
+        consumer.requestMetric(escrowAddress, 0),
+        /milestone not pending/
       );
     });
   });
@@ -184,6 +207,28 @@ describe("MetricsConsumer", async () => {
       assert.equal(ctx.milestoneIndex, 0n);
       assert.equal(ctx.fulfilled, false);
     });
+
+    // Regression: only the content ID used to be sent, so every script fell
+    // back to a default metric and a followers milestone was judged on views.
+    it("sends the milestone's metric, channel and creator to the DON", async () => {
+      await consumer.setSourceCode(PLATFORM_TWITCH, "return 1");
+      await requestMetric(1);
+
+      const payload = (await router.lastRequestData()).toLowerCase();
+      const hex = (text) => ethers.hexlify(ethers.toUtf8Bytes(text)).slice(2);
+
+      assert.ok(payload.includes(hex(TWITCH_LOGIN)), "content ID missing");
+      assert.ok(payload.includes(hex("FOLLOWERS")), "metric type missing");
+      assert.ok(!payload.includes(hex("VIEWS")), "wrong metric type sent");
+      assert.ok(payload.includes(hex(creator.address.toLowerCase())), "creator missing");
+    });
+
+    it("sends the creator's own channel for ownership checks", async () => {
+      await requestMetric(0);
+      const payload = (await router.lastRequestData()).toLowerCase();
+      const hex = (text) => ethers.hexlify(ethers.toUtf8Bytes(text)).slice(2);
+      assert.ok(payload.includes(hex(CHANNEL_ID).toLowerCase()), "channel ID missing");
+    });
   });
 
   // ─────────────────────────────────────────────
@@ -193,14 +238,12 @@ describe("MetricsConsumer", async () => {
   describe("Fulfillment", async () => {
     beforeEach(deployAll);
 
-    it("delivers the metric and releases the tranche", async () => {
+    it("delivers the metric and credits the tranche", async () => {
       const requestId = await requestMetric();
-      const before = await usdc.balanceOf(creator.address);
 
       await fulfill(requestId, encodeUint(75_000), "0x");
 
-      const after = await usdc.balanceOf(creator.address);
-      assert.equal(after - before, TRANCHE);
+      assert.equal(await escrow.withdrawable(creator.address), TRANCHE);
 
       const milestone = await escrow.getMilestone(0);
       assert.equal(milestone.status, 1n); // MET
@@ -216,7 +259,7 @@ describe("MetricsConsumer", async () => {
 
       const milestone = await escrow.getMilestone(0);
       assert.equal(milestone.status, 0n); // PENDING
-      assert.equal(await usdc.balanceOf(creator.address), 0n);
+      assert.equal(await escrow.withdrawable(creator.address), 0n);
     });
 
     it("reports a DON-side error without touching the escrow", async () => {
@@ -229,7 +272,7 @@ describe("MetricsConsumer", async () => {
       assert.ok(receipt.logs.length > 0);
       const milestone = await escrow.getMilestone(0);
       assert.equal(milestone.status, 0n); // PENDING
-      assert.equal(await usdc.balanceOf(creator.address), 0n);
+      assert.equal(await escrow.withdrawable(creator.address), 0n);
     });
   });
 
@@ -241,20 +284,19 @@ describe("MetricsConsumer", async () => {
     beforeEach(deployAll);
 
     it("does not revert when the escrow rejects the metric", async () => {
-      // Resolve the milestone first, so the second delivery is refused by the
-      // escrow with "milestone already resolved".
+      // Two requests in flight for the same milestone. The first resolves it,
+      // so the escrow refuses the second with "milestone already resolved".
       const first = await requestMetric();
-      await fulfill(first, encodeUint(75_000), "0x");
-
       const second = await requestMetric();
+      await fulfill(first, encodeUint(75_000), "0x");
 
       // Must complete rather than revert.
       await fulfill(second, encodeUint(90_000), "0x");
 
       const ctx = await consumer.pendingRequests(second);
       assert.equal(ctx.fulfilled, true);
-      // The creator was paid exactly once.
-      assert.equal(await usdc.balanceOf(creator.address), TRANCHE);
+      // The creator was credited exactly once.
+      assert.equal(await escrow.withdrawable(creator.address), TRANCHE);
     });
 
     it("does not revert on a malformed response", async () => {
@@ -271,7 +313,7 @@ describe("MetricsConsumer", async () => {
 
     it("does not revert on an unknown request id", async () => {
       await fulfill(ethers.encodeBytes32String("never-sent"), encodeUint(75_000), "0x");
-      assert.equal(await usdc.balanceOf(creator.address), 0n);
+      assert.equal(await escrow.withdrawable(creator.address), 0n);
     });
 
     it("does not revert on a duplicate fulfillment", async () => {
@@ -281,7 +323,7 @@ describe("MetricsConsumer", async () => {
       // Replaying the same result must be a no-op, not a revert.
       await fulfill(requestId, encodeUint(75_000), "0x");
 
-      assert.equal(await usdc.balanceOf(creator.address), TRANCHE);
+      assert.equal(await escrow.withdrawable(creator.address), TRANCHE);
     });
 
     it("rejects fulfillment from anyone but the router", async () => {

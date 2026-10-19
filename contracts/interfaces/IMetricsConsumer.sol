@@ -13,8 +13,6 @@ interface IMetricsConsumer {
     /// @param escrowAddress The escrow the result must be delivered to
     function requestMetric(
         address escrowAddress,
-        uint256 milestoneIndex,
-        uint8 platform,
-        string memory contentId
+        uint256 milestoneIndex
     ) external returns (bytes32 requestId);
 }

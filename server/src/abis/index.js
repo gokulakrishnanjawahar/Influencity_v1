@@ -238,11 +238,6 @@ export const CampaignFactoryABI = [
         "internalType": "uint256[]",
         "name": "_deadlines",
         "type": "uint256[]"
-      },
-      {
-        "internalType": "string[]",
-        "name": "_contentIds",
-        "type": "string[]"
       }
     ],
     "name": "createCampaign",
@@ -497,6 +492,17 @@ export const CampaignEscrowABI = [
     "type": "error"
   },
   {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "token",
+        "type": "address"
+      }
+    ],
+    "name": "SafeERC20FailedOperation",
+    "type": "error"
+  },
+  {
     "anonymous": false,
     "inputs": [
       {
@@ -722,6 +728,68 @@ export const CampaignEscrowABI = [
     "type": "event"
   },
   {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "campaignId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "milestoneIndex",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "contentId",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "channelId",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "ipfsProofHash",
+        "type": "string"
+      }
+    ],
+    "name": "ProofSubmitted",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "to",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      }
+    ],
+    "name": "Withdrawn",
+    "type": "event"
+  },
+  {
     "inputs": [],
     "name": "MAX_MILESTONES",
     "outputs": [
@@ -760,11 +828,6 @@ export const CampaignEscrowABI = [
         "internalType": "uint256",
         "name": "_deadline",
         "type": "uint256"
-      },
-      {
-        "internalType": "string",
-        "name": "_contentId",
-        "type": "string"
       }
     ],
     "name": "addMilestone",
@@ -908,6 +971,11 @@ export const CampaignEscrowABI = [
           },
           {
             "internalType": "string",
+            "name": "channelId",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
             "name": "ipfsProofHash",
             "type": "string"
           },
@@ -972,6 +1040,11 @@ export const CampaignEscrowABI = [
           {
             "internalType": "string",
             "name": "contentId",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "channelId",
             "type": "string"
           },
           {
@@ -1087,6 +1160,11 @@ export const CampaignEscrowABI = [
       },
       {
         "internalType": "string",
+        "name": "channelId",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
         "name": "ipfsProofHash",
         "type": "string"
       },
@@ -1159,6 +1237,16 @@ export const CampaignEscrowABI = [
       },
       {
         "internalType": "string",
+        "name": "_contentId",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "_channelId",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
         "name": "_ipfsProofHash",
         "type": "string"
       }
@@ -1195,6 +1283,19 @@ export const CampaignEscrowABI = [
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "totalWithdrawable",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -1215,6 +1316,38 @@ export const CampaignEscrowABI = [
         "internalType": "contract IERC20",
         "name": "",
         "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "to",
+        "type": "address"
+      }
+    ],
+    "name": "withdraw",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "withdrawable",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -1473,6 +1606,24 @@ export const ReputationTokenABI = [
         "internalType": "uint256",
         "name": "mintedAt",
         "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "escrow",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "brand",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "value",
+        "type": "uint256"
       }
     ],
     "name": "ReputationMinted",
@@ -1695,11 +1846,79 @@ export const ReputationTokenABI = [
             "internalType": "uint256",
             "name": "mintedAt",
             "type": "uint256"
+          },
+          {
+            "internalType": "address",
+            "name": "escrow",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "brand",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "value",
+            "type": "uint256"
           }
         ],
         "internalType": "struct ReputationToken.MintRecord[]",
         "name": "",
         "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "creator",
+        "type": "address"
+      }
+    ],
+    "name": "getReputation",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "milestones",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "earned",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "uniqueBrands",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "hasWorkedWith",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
       }
     ],
     "stateMutability": "view",
@@ -1745,6 +1964,16 @@ export const ReputationTokenABI = [
         "internalType": "uint256",
         "name": "campaignId",
         "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "brand",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "value",
+        "type": "uint256"
       }
     ],
     "name": "mint",
@@ -1785,6 +2014,21 @@ export const ReputationTokenABI = [
       {
         "internalType": "uint256",
         "name": "mintedAt",
+        "type": "uint256"
+      },
+      {
+        "internalType": "address",
+        "name": "escrow",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "brand",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "value",
         "type": "uint256"
       }
     ],
@@ -2026,6 +2270,25 @@ export const ReputationTokenABI = [
     "inputs": [
       {
         "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "totalEarned",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
         "name": "newOwner",
         "type": "address"
       }
@@ -2033,6 +2296,25 @@ export const ReputationTokenABI = [
     "name": "transferOwnership",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "uniqueBrandCount",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {
@@ -2096,6 +2378,22 @@ export const MetricsConsumerABI = [
   {
     "inputs": [],
     "name": "OnlyRouterCanFulfill",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "value",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "length",
+        "type": "uint256"
+      }
+    ],
+    "name": "StringsInsufficientHexLength",
     "type": "error"
   },
   {
@@ -2517,16 +2815,6 @@ export const MetricsConsumerABI = [
         "internalType": "uint256",
         "name": "milestoneIndex",
         "type": "uint256"
-      },
-      {
-        "internalType": "uint8",
-        "name": "platform",
-        "type": "uint8"
-      },
-      {
-        "internalType": "string",
-        "name": "contentId",
-        "type": "string"
       }
     ],
     "name": "requestMetric",

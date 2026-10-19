@@ -29,7 +29,6 @@ describe("CampaignFactory", async () => {
   const METRIC_TYPE = 0;
   const THRESHOLD = 50_000;
   const TRANCHE = USDC(100);
-  const CONTENT_ID = "dQw4w9WgXcQ";
   const IPFS_BRIEF = "bafybeibriefhash";
 
   async function futureDeadline(secondsFromNow = 86400) {
@@ -88,7 +87,6 @@ describe("CampaignFactory", async () => {
       thresholds: Array(count).fill(THRESHOLD),
       trancheAmounts: Array(count).fill(TRANCHE),
       deadlines: Array(count).fill(deadline),
-      contentIds: Array(count).fill(CONTENT_ID),
     };
   }
 
@@ -101,8 +99,7 @@ describe("CampaignFactory", async () => {
       args.metricTypes,
       args.thresholds,
       args.trancheAmounts,
-      args.deadlines,
-      args.contentIds
+      args.deadlines
     );
     const receipt = await tx.wait();
     const event = receipt.logs.find(
@@ -304,7 +301,7 @@ describe("CampaignFactory", async () => {
         factory.connect(brand).createCampaign(
           "",
           args.platforms, args.metricTypes, args.thresholds,
-          args.trancheAmounts, args.deadlines, args.contentIds
+          args.trancheAmounts, args.deadlines
         ),
         /brief hash required/
       );
@@ -314,7 +311,7 @@ describe("CampaignFactory", async () => {
       await assert.rejects(
         factory.connect(brand).createCampaign(
           IPFS_BRIEF,
-          [], [], [], [], [], []
+          [], [], [], [], []
         ),
         /at least one milestone required/
       );
@@ -328,8 +325,7 @@ describe("CampaignFactory", async () => {
           [METRIC_TYPE],                   // but only 1 metric type
           [THRESHOLD],
           [TRANCHE],
-          [await futureDeadline()],
-          [CONTENT_ID]
+          [await futureDeadline()]
         ),
         /milestone arrays length mismatch/
       );

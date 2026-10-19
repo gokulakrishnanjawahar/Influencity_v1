@@ -5,139 +5,105 @@
 // Runs on each Chainlink Functions node independently.
 // Nodes reach consensus on the result before posting it on-chain.
 //
-// Arguments (passed in `args` from the smart contract):
-//   args[0] = LinkedIn post URN (URL encoded)
-//             e.g. "urn:li:share:7123456789012345678"
-//             or   "urn:li:ugcPost:7123456789012345678"
-//   args[1] = metric type string: "IMPRESSIONS" | "CLICKS" | "ENGAGEMENT"
+// Arguments (built by MetricsConsumer.requestMetric from the milestone):
+//   args[0] = post URN, e.g. "urn:li:share:7123456789012345678"
+//   args[1] = metric type: "VIEWS" (impressions) | "CLICKS"
+//   args[2] = the creator's organisation URN, e.g. "urn:li:organization:123"
+//   args[3] = the creator's wallet address, lowercase hex
 //
 // Secrets (passed encrypted via DON-hosted secrets):
 //   secrets.linkedinAccessToken = LinkedIn OAuth2 access token
 //                                 (from Marketing API OAuth flow)
 //
-// Returns:
-//   uint256 — the requested metric value
+// Ownership: statistics are requested scoped to args[2], so LinkedIn only
+// returns them for a post that organisation published. The organisation's
+// description must also contain the creator's wallet address.
 //
-// Note: LinkedIn Marketing API returns engagement rate as a float (e.g. 0.045).
-// We multiply by 10000 and return as uint256 to preserve 4 decimal places.
-// e.g. 4.5% engagement = 450 on-chain. Smart contract milestones must
-// use this scaled value when setting thresholds.
+// Returns:
+//   uint256 — the requested metric
 // ─────────────────────────────────────────────
 
-// 1. Extract arguments
-const postUrn = args[0];
-const metricType = args[1] || "IMPRESSIONS";
+const [postUrn, metricType, organizationUrn, creatorAddress] = args;
 
-if (!postUrn || postUrn.length === 0) {
-  throw Error("LinkedIn post URN is required as args[0]");
+if (!postUrn || !metricType || !organizationUrn || !creatorAddress) {
+  throw Error("Expected args: postUrn, metricType, organizationUrn, creatorAddress");
 }
 
-// 2. Validate secrets
+if (metricType !== "VIEWS" && metricType !== "CLICKS") {
+  throw Error(`Unsupported LinkedIn metric: ${metricType}. Use VIEWS or CLICKS`);
+}
+
 if (!secrets.linkedinAccessToken) {
   throw Error("LinkedIn access token not provided in secrets.linkedinAccessToken");
 }
 
-// 3. URL-encode the URN for use in query params
-// LinkedIn URNs contain colons which must be encoded in URLs
-const encodedUrn = encodeURIComponent(postUrn);
+const organizationId = organizationUrn.split(":").pop();
+if (!/^\d+$/.test(organizationId)) {
+  throw Error(`Not an organisation URN: ${organizationUrn}`);
+}
+
+const headers = {
+  "Authorization": `Bearer ${secrets.linkedinAccessToken}`,
+  "LinkedIn-Version": "202304",
+  "X-Restli-Protocol-Version": "2.0.0",
+};
 
 // ─────────────────────────────────────────────
-// Step 1 — Fetch Post Analytics from LinkedIn
+// Proof of control: the organisation description must contain the wallet
 // ─────────────────────────────────────────────
-// LinkedIn Marketing API — Share Statistics endpoint
-// API docs: https://learn.microsoft.com/en-us/linkedin/marketing/integrations/community-management/shares/share-statistics-api
 
-const analyticsRequest = Functions.makeHttpRequest({
-  url: "https://api.linkedin.com/v2/organizationalEntityShareStatistics",
+const orgResponse = await Functions.makeHttpRequest({
+  url: `https://api.linkedin.com/rest/organizations/${organizationId}`,
   method: "GET",
-  headers: {
-    "Authorization": `Bearer ${secrets.linkedinAccessToken}`,
-    "LinkedIn-Version": "202304",
-    "X-Restli-Protocol-Version": "2.0.0",
-  },
-  params: {
-    q: "organizationalEntity",
-    shares: `List(${encodedUrn})`,
-  },
-  timeout: 8000,
+  headers,
+  timeout: 4000,
 });
 
-const analyticsResponse = await analyticsRequest;
-
-// 4. Handle API errors
-if (analyticsResponse.error) {
-  console.error("LinkedIn API request failed:", analyticsResponse.error);
-  throw Error(`LinkedIn API error: ${analyticsResponse.message || "unknown"}`);
+if (orgResponse.error || !orgResponse.data) {
+  throw Error(`LinkedIn organisation lookup failed: ${orgResponse.message || "unknown"}`);
 }
 
-const data = analyticsResponse.data;
-
-// 5. Validate response shape
-if (!data || !data.elements || data.elements.length === 0) {
-  throw Error(`No analytics found for URN: ${postUrn}`);
-}
-
-const stats = data.elements[0].totalShareStatistics;
-
-if (!stats) {
-  throw Error(`No share statistics returned for URN: ${postUrn}`);
+const description = (orgResponse.data.localizedDescription || "").toLowerCase();
+if (!description.includes(creatorAddress.toLowerCase())) {
+  throw Error(`Organisation ${organizationUrn} description does not contain ${creatorAddress}`);
 }
 
 // ─────────────────────────────────────────────
-// Step 2 — Extract the Requested Metric
+// Post statistics, scoped to the creator's organisation
 // ─────────────────────────────────────────────
+// API docs: https://learn.microsoft.com/en-us/linkedin/marketing/integrations/community-management/shares/share-statistics-api
 
-let metricValue = 0;
+const statsResponse = await Functions.makeHttpRequest({
+  url: "https://api.linkedin.com/rest/organizationalEntityShareStatistics",
+  method: "GET",
+  headers,
+  params: {
+    q: "organizationalEntity",
+    organizationalEntity: organizationUrn,
+    shares: `List(${encodeURIComponent(postUrn)})`,
+  },
+  timeout: 4000,
+});
 
-if (metricType === "IMPRESSIONS") {
-  // Total number of times the post was shown to LinkedIn members
-  metricValue = parseInt(stats.impressionCount || "0", 10);
-  console.log(`Post ${postUrn} → impressions: ${metricValue}`);
-
-} else if (metricType === "CLICKS") {
-  // Total number of clicks on the post (links, company name, likes, comments)
-  metricValue = parseInt(stats.clickCount || "0", 10);
-  console.log(`Post ${postUrn} → clicks: ${metricValue}`);
-
-} else if (metricType === "ENGAGEMENT") {
-  // Engagement rate = (clicks + likes + comments + shares) / impressions
-  // LinkedIn may return this directly, or we calculate it
-  if (stats.engagement !== undefined) {
-    // LinkedIn returns engagement as a float e.g. 0.045 = 4.5%
-    // Multiply by 10000 to preserve 4 decimal places as uint256
-    // e.g. 4.5% → 450, 0.123% → 12
-    const engagementRate = parseFloat(stats.engagement || "0");
-    metricValue = Math.floor(engagementRate * 10000);
-    console.log(`Post ${postUrn} → engagement rate: ${engagementRate} (scaled: ${metricValue})`);
-  } else {
-    // Calculate manually if not provided directly
-    const impressions = parseInt(stats.impressionCount || "0", 10);
-    const interactions =
-      parseInt(stats.clickCount || "0", 10) +
-      parseInt(stats.likeCount || "0", 10) +
-      parseInt(stats.commentCount || "0", 10) +
-      parseInt(stats.shareCount || "0", 10);
-
-    if (impressions === 0) {
-      metricValue = 0;
-    } else {
-      const rate = interactions / impressions;
-      metricValue = Math.floor(rate * 10000);
-    }
-    console.log(`Post ${postUrn} → calculated engagement (scaled): ${metricValue}`);
-  }
-
-} else {
-  throw Error(`Unsupported metric type: ${metricType}. Use IMPRESSIONS, CLICKS, or ENGAGEMENT`);
+if (statsResponse.error) {
+  throw Error(`LinkedIn statistics request failed: ${statsResponse.message || "unknown"}`);
 }
 
-// ─────────────────────────────────────────────
-// Step 3 — Validate and Return
-// ─────────────────────────────────────────────
+const element = statsResponse.data?.elements?.[0];
+if (!element || element.organizationalEntity !== organizationUrn) {
+  throw Error(`No statistics for ${postUrn} under ${organizationUrn}`);
+}
 
-if (metricValue < 0 || metricValue > Number.MAX_SAFE_INTEGER) {
+const stats = element.totalShareStatistics || {};
+const metricValue = metricType === "VIEWS"
+  ? parseInt(stats.impressionCount || "0", 10)
+  : parseInt(stats.clickCount || "0", 10);
+
+console.log(`${metricType} for ${postUrn} under ${organizationUrn}: ${metricValue}`);
+
+if (!Number.isFinite(metricValue) || metricValue < 0 || metricValue > Number.MAX_SAFE_INTEGER) {
   throw Error(`Invalid metric value: ${metricValue}`);
 }
 
-// Return encoded uint256 to be decoded on-chain by MetricsConsumer
+// MetricsConsumer.sol decodes this with abi.decode(response, (uint256))
 return Functions.encodeUint256(metricValue);

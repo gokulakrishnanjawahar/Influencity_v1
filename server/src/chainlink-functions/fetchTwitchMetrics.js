@@ -5,188 +5,117 @@
 // Runs on each Chainlink Functions node independently.
 // Nodes reach consensus on the result before posting it on-chain.
 //
-// Arguments (passed in `args` from the smart contract):
-//   args[0] = Twitch content ID
-//             For clips: clip slug (e.g. "TastyBraveAardvarkPRChase-abc123")
-//             For streams: broadcaster login name (e.g. "shroud")
-//   args[1] = metric type string: "CLIP_VIEWS" | "CONCURRENT_VIEWERS" | "FOLLOWERS"
+// Arguments (built by MetricsConsumer.requestMetric from the milestone):
+//   args[0] = content ID — a clip ID for VIEWS, the channel login otherwise
+//   args[1] = metric type: "VIEWS" | "CONCURRENT_VIEWERS" | "FOLLOWERS"
+//   args[2] = the creator's Twitch login (e.g. "somestreamer")
+//   args[3] = the creator's wallet address, lowercase hex
 //
 // Secrets (passed encrypted via DON-hosted secrets):
-//   secrets.twitchClientId     = Twitch app Client ID
-//   secrets.twitchClientSecret = Twitch app Client Secret
+//   secrets.twitchClientId     = Twitch application client ID
+//   secrets.twitchClientSecret = Twitch application client secret
+//
+// Ownership: the reading is only returned if the content belongs to args[2]
+// AND that channel's bio contains the creator's wallet address.
 //
 // Returns:
-//   uint256 — the requested metric value
-//
-// Note: Twitch requires a fresh OAuth2 app access token per request.
-// We fetch the token first, then use it for the actual metric call.
+//   uint256 — the requested metric
 // ─────────────────────────────────────────────
 
-// 1. Extract arguments
-const contentId = args[0];
-const metricType = args[1] || "CLIP_VIEWS";
+const [contentId, metricType, channelLogin, creatorAddress] = args;
 
-if (!contentId || contentId.length === 0) {
-  throw Error("Twitch content ID is required as args[0]");
+if (!contentId || !metricType || !channelLogin || !creatorAddress) {
+  throw Error("Expected args: contentId, metricType, channelLogin, creatorAddress");
 }
 
-// 2. Validate secrets
 if (!secrets.twitchClientId || !secrets.twitchClientSecret) {
   throw Error("Twitch credentials not provided in secrets");
 }
 
 // ─────────────────────────────────────────────
-// Step 1 — Get OAuth2 App Access Token
+// App access token — client credentials, no logged-in user needed
 // ─────────────────────────────────────────────
-// Twitch requires a fresh token per request.
-// App access tokens don't require a logged-in user — just client credentials.
 
-const tokenRequest = Functions.makeHttpRequest({
+const tokenResponse = await Functions.makeHttpRequest({
   url: "https://id.twitch.tv/oauth2/token",
   method: "POST",
-  headers: {
-    "Content-Type": "application/x-www-form-urlencoded",
-  },
+  headers: { "Content-Type": "application/x-www-form-urlencoded" },
   data: `client_id=${secrets.twitchClientId}&client_secret=${secrets.twitchClientSecret}&grant_type=client_credentials`,
-  timeout: 5000,
+  timeout: 3000,
 });
 
-const tokenResponse = await tokenRequest;
-
-if (tokenResponse.error || !tokenResponse.data || !tokenResponse.data.access_token) {
+if (tokenResponse.error || !tokenResponse.data?.access_token) {
   throw Error("Failed to obtain Twitch access token");
 }
 
 const accessToken = tokenResponse.data.access_token;
 
-// ─────────────────────────────────────────────
-// Step 2 — Fetch the Requested Metric
-// ─────────────────────────────────────────────
-
-let metricValue = 0;
-
-if (metricType === "CLIP_VIEWS") {
-  // Fetch clip view count by clip slug
-  // API docs: https://dev.twitch.tv/docs/api/reference/#get-clips
-  const clipRequest = Functions.makeHttpRequest({
-    url: "https://api.twitch.tv/helix/clips",
+// API docs: https://dev.twitch.tv/docs/api/reference
+async function helix(path, params) {
+  const response = await Functions.makeHttpRequest({
+    url: `https://api.twitch.tv/helix/${path}`,
     method: "GET",
     headers: {
       "Client-Id": secrets.twitchClientId,
       "Authorization": `Bearer ${accessToken}`,
     },
-    params: {
-      id: contentId,
-    },
-    timeout: 5000,
+    params,
+    timeout: 3000,
   });
-
-  const clipResponse = await clipRequest;
-
-  if (clipResponse.error) {
-    throw Error(`Twitch clips API error: ${clipResponse.message || "unknown"}`);
+  if (response.error) {
+    throw Error(`Twitch ${path} request failed: ${response.message || "unknown"}`);
   }
+  return response.data;
+}
 
-  const clipData = clipResponse.data;
+// ─────────────────────────────────────────────
+// Proof of control: the channel bio must contain the creator's wallet
+// ─────────────────────────────────────────────
 
-  if (!clipData || !clipData.data || clipData.data.length === 0) {
+const user = (await helix("users", { login: channelLogin }))?.data?.[0];
+if (!user) {
+  throw Error(`Twitch user not found: ${channelLogin}`);
+}
+if (!(user.description || "").toLowerCase().includes(creatorAddress.toLowerCase())) {
+  throw Error(`Channel ${channelLogin} bio does not contain ${creatorAddress}`);
+}
+
+// Channel-level metrics measure the creator's own channel and nothing else
+if (metricType !== "VIEWS" && contentId.toLowerCase() !== channelLogin.toLowerCase()) {
+  throw Error(`${metricType} milestones must measure the creator's own channel`);
+}
+
+// ─────────────────────────────────────────────
+// Fetch the requested metric
+// ─────────────────────────────────────────────
+
+let metricValue;
+
+if (metricType === "VIEWS") {
+  const clip = (await helix("clips", { id: contentId }))?.data?.[0];
+  if (!clip) {
     throw Error(`No clip found for ID: ${contentId}`);
   }
-
-  metricValue = parseInt(clipData.data[0].view_count || "0", 10);
-  console.log(`Clip ${contentId} → views: ${metricValue}`);
-
+  if (clip.broadcaster_id !== user.id) {
+    throw Error(`Clip ${contentId} is not from channel ${channelLogin}`);
+  }
+  metricValue = parseInt(clip.view_count || "0", 10);
 } else if (metricType === "CONCURRENT_VIEWERS") {
-  // Fetch live stream viewer count by broadcaster login
-  // Returns 0 if the streamer is offline (not an error)
-  // API docs: https://dev.twitch.tv/docs/api/reference/#get-streams
-  const streamRequest = Functions.makeHttpRequest({
-    url: "https://api.twitch.tv/helix/streams",
-    method: "GET",
-    headers: {
-      "Client-Id": secrets.twitchClientId,
-      "Authorization": `Bearer ${accessToken}`,
-    },
-    params: {
-      user_login: contentId,
-    },
-    timeout: 5000,
-  });
-
-  const streamResponse = await streamRequest;
-
-  if (streamResponse.error) {
-    throw Error(`Twitch streams API error: ${streamResponse.message || "unknown"}`);
-  }
-
-  const streamData = streamResponse.data;
-
-  // If stream is offline, data array is empty — viewer count is 0
-  if (!streamData || !streamData.data || streamData.data.length === 0) {
-    metricValue = 0;
-    console.log(`Broadcaster ${contentId} is offline — viewer count: 0`);
-  } else {
-    metricValue = parseInt(streamData.data[0].viewer_count || "0", 10);
-    console.log(`Broadcaster ${contentId} → concurrent viewers: ${metricValue}`);
-  }
-
+  // An offline stream returns no data — a reading of 0, not an error
+  const stream = (await helix("streams", { user_id: user.id }))?.data?.[0];
+  metricValue = stream ? parseInt(stream.viewer_count || "0", 10) : 0;
 } else if (metricType === "FOLLOWERS") {
-  // Fetch total follower count for a channel
-  // API docs: https://dev.twitch.tv/docs/api/reference/#get-channel-followers
-  const userRequest = Functions.makeHttpRequest({
-    url: "https://api.twitch.tv/helix/users",
-    method: "GET",
-    headers: {
-      "Client-Id": secrets.twitchClientId,
-      "Authorization": `Bearer ${accessToken}`,
-    },
-    params: {
-      login: contentId,
-    },
-    timeout: 5000,
-  });
-
-  const userResponse = await userRequest;
-
-  if (userResponse.error || !userResponse.data?.data?.[0]) {
-    throw Error(`Twitch user not found: ${contentId}`);
-  }
-
-  const broadcasterId = userResponse.data.data[0].id;
-
-  const followerRequest = Functions.makeHttpRequest({
-    url: "https://api.twitch.tv/helix/channels/followers",
-    method: "GET",
-    headers: {
-      "Client-Id": secrets.twitchClientId,
-      "Authorization": `Bearer ${accessToken}`,
-    },
-    params: {
-      broadcaster_id: broadcasterId,
-    },
-    timeout: 5000,
-  });
-
-  const followerResponse = await followerRequest;
-
-  if (followerResponse.error) {
-    throw Error(`Twitch followers API error: ${followerResponse.message || "unknown"}`);
-  }
-
-  metricValue = parseInt(followerResponse.data?.total || "0", 10);
-  console.log(`Channel ${contentId} → followers: ${metricValue}`);
-
+  const followers = await helix("channels/followers", { broadcaster_id: user.id });
+  metricValue = parseInt(followers?.total || "0", 10);
 } else {
-  throw Error(`Unsupported metric type: ${metricType}. Use CLIP_VIEWS, CONCURRENT_VIEWERS, or FOLLOWERS`);
+  throw Error(`Unsupported Twitch metric: ${metricType}. Use VIEWS, CONCURRENT_VIEWERS or FOLLOWERS`);
 }
 
-// ─────────────────────────────────────────────
-// Step 3 — Validate and Return
-// ─────────────────────────────────────────────
+console.log(`${metricType} for ${contentId} on ${channelLogin}: ${metricValue}`);
 
-if (metricValue < 0 || metricValue > Number.MAX_SAFE_INTEGER) {
-  throw Error(`Invalid metric value returned: ${metricValue}`);
+if (!Number.isFinite(metricValue) || metricValue < 0 || metricValue > Number.MAX_SAFE_INTEGER) {
+  throw Error(`Invalid metric value: ${metricValue}`);
 }
 
-// Return encoded uint256 to be decoded on-chain by MetricsConsumer
+// MetricsConsumer.sol decodes this with abi.decode(response, (uint256))
 return Functions.encodeUint256(metricValue);

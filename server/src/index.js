@@ -7,7 +7,8 @@ import express from "express";
 import cors from "cors";
 import campaignRoutes from "./routes/campaigns.js";
 import creatorRoutes from "./routes/creators.js";
-import webhookRoutes from "./routes/webhooks.js";
+import authRoutes from "./routes/auth.js";
+import syncRoutes from "./routes/sync.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -40,9 +41,10 @@ app.get("/health", (req, res) => {
 // Routes
 // ─────────────────────────────────────────────
 
+app.use("/auth", authRoutes);
 app.use("/campaigns", campaignRoutes);
 app.use("/creators", creatorRoutes);
-app.use("/webhooks", webhookRoutes);
+app.use("/sync", syncRoutes);
 
 // ─────────────────────────────────────────────
 // Global Error Handler

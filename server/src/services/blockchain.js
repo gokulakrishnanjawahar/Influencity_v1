@@ -1,11 +1,13 @@
 // ─────────────────────────────────────────────
 // Blockchain Service
 // ─────────────────────────────────────────────
-// Handles all smart contract interactions from the backend.
-// Used for:
-// - Reading campaign and milestone state from escrow contracts
-// - Submitting proof CIDs to escrow contracts on behalf of creators
-// - Listening to on-chain events to sync state
+// Read-only access to the deployed contracts.
+//
+// The server holds no private key and sends no transactions. Every state
+// change — creating, funding, selecting, submitting proof, withdrawing — is
+// signed by the user's own wallet in the browser, and the contracts check
+// msg.sender themselves. A key here could do nothing those checks allow, but
+// would be a standing liability on a serverless host.
 // ─────────────────────────────────────────────
 
 import { ethers } from "ethers";
@@ -22,7 +24,7 @@ import { ABIS } from "../abis/index.js";
 // Regenerate after changing a contract's external interface:
 //   npm run build:abis      (from the project root)
 
-function loadABI(contractName) {
+export function loadABI(contractName) {
   const abi = ABIS[contractName];
   if (!abi) {
     throw new Error(
@@ -35,10 +37,12 @@ function loadABI(contractName) {
 }
 
 // ─────────────────────────────────────────────
-// Provider + Signer Setup
+// Provider
 // ─────────────────────────────────────────────
 
-/// @notice Creates a read-only provider for querying contract state.
+let provider;
+
+/// @notice Read-only provider for querying contract state.
 /// RPC_URL must point at the same chain the contract addresses below were
 /// deployed to (Polygon Amoy in the default setup).
 ///
@@ -48,239 +52,141 @@ function loadABI(contractName) {
 /// address return empty data rather than erroring, so the failure would
 /// surface as "no campaigns found" rather than as a misconfiguration.
 export function getProvider() {
+  if (provider) return provider;
   const rpcUrl = process.env.RPC_URL;
   if (!rpcUrl) {
     throw new Error(
-      "RPC_URL not set in .env — required to reach the chain. " +
+      "RPC_URL not set. " +
         "Set it to your Polygon Amoy or Polygon mainnet RPC endpoint."
     );
   }
-  return new ethers.JsonRpcProvider(rpcUrl);
+  provider = new ethers.JsonRpcProvider(rpcUrl, undefined, { staticNetwork: true });
+  return provider;
 }
 
-/// @notice Creates a signer for sending transactions
-/// Uses the backend wallet private key from .env
-export function getSigner() {
-  const provider = getProvider();
-  const privateKey = process.env.PRIVATE_KEY;
-  if (!privateKey) {
-    throw new Error("PRIVATE_KEY not set in .env — required for contract interactions");
+function requireAddress(name) {
+  const address = process.env[name];
+  if (!address || !ethers.isAddress(address)) {
+    throw new Error(`${name} not set to a valid address`);
   }
-  return new ethers.Wallet(privateKey, provider);
+  return address;
 }
 
-// ─────────────────────────────────────────────
-// Contract Instances
-// ─────────────────────────────────────────────
-
-/// @notice Returns a read-only CampaignFactory contract instance
 export function getCampaignFactory() {
-  const address = process.env.CAMPAIGN_FACTORY_ADDRESS;
-  if (!address) throw new Error("CAMPAIGN_FACTORY_ADDRESS not set in .env");
-  const abi = loadABI("CampaignFactory");
-  return new ethers.Contract(address, abi, getProvider());
+  return new ethers.Contract(
+    requireAddress("CAMPAIGN_FACTORY_ADDRESS"),
+    loadABI("CampaignFactory"),
+    getProvider()
+  );
 }
 
-/// @notice Returns a read-only CampaignEscrow instance for a given address
 export function getCampaignEscrow(escrowAddress) {
   if (!escrowAddress || !ethers.isAddress(escrowAddress)) {
     throw new Error(`Invalid escrow address: ${escrowAddress}`);
   }
-  const abi = loadABI("CampaignEscrow");
-  return new ethers.Contract(escrowAddress, abi, getProvider());
+  return new ethers.Contract(escrowAddress, loadABI("CampaignEscrow"), getProvider());
 }
 
-/// @notice Returns a writable CampaignEscrow instance (with signer)
-export function getCampaignEscrowWithSigner(escrowAddress) {
-  if (!escrowAddress || !ethers.isAddress(escrowAddress)) {
-    throw new Error(`Invalid escrow address: ${escrowAddress}`);
-  }
-  const abi = loadABI("CampaignEscrow");
-  return new ethers.Contract(escrowAddress, abi, getSigner());
-}
-
-/// @notice Returns a read-only ReputationToken instance
 export function getReputationToken() {
-  const address = process.env.REPUTATION_TOKEN_ADDRESS;
-  if (!address) throw new Error("REPUTATION_TOKEN_ADDRESS not set in .env");
-  const abi = loadABI("ReputationToken");
-  return new ethers.Contract(address, abi, getProvider());
+  return new ethers.Contract(
+    requireAddress("REPUTATION_TOKEN_ADDRESS"),
+    loadABI("ReputationToken"),
+    getProvider()
+  );
 }
 
 // ─────────────────────────────────────────────
-// Campaign Queries
+// Campaign State
 // ─────────────────────────────────────────────
 
-/// @notice Reads full campaign state from an escrow contract
-/// @param {string} escrowAddress - Address of the CampaignEscrow contract
-/// @returns {Promise<object>} - Campaign state including all milestones
+const PLATFORMS = ["YOUTUBE", "TWITCH", "LINKEDIN"];
+const METRIC_TYPES = ["VIEWS", "CLICKS", "FOLLOWERS", "WATCH_TIME", "CONCURRENT_VIEWERS"];
+const MILESTONE_STATUSES = ["pending", "met", "failed"];
+
+/// @notice Reads every milestone of an escrow, in the shape the database uses
+export async function readMilestones(escrowAddress) {
+  const raw = await getCampaignEscrow(escrowAddress).getMilestones();
+  return raw.map((m, i) => ({
+    index: i,
+    platform: PLATFORMS[Number(m.platform)],
+    metricType: METRIC_TYPES[Number(m.metricType)],
+    threshold: m.threshold.toString(),
+    trancheAmount: m.trancheAmount.toString(),
+    deadline: Number(m.deadline),
+    contentId: m.contentId || null,
+    channelId: m.channelId || null,
+    ipfsProofHash: m.ipfsProofHash || null,
+    status: MILESTONE_STATUSES[Number(m.status)],
+  }));
+}
 
 export async function getCampaignState(escrowAddress) {
-  try {
-    const escrow = getCampaignEscrow(escrowAddress);
-
-    const [
-      campaignId,
-      brand,
-      creator,
-      ipfsBriefHash,
-      totalDeposit,
-      totalReleased,
-      isFinalized,
-      milestoneCount,
-    ] = await Promise.all([
-      escrow.campaignId(),
-      escrow.brand(),
-      escrow.creator(),
-      escrow.ipfsBriefHash(),
-      escrow.totalDeposit(),
-      escrow.totalReleased(),
-      escrow.isFinalized(),
-      escrow.getMilestoneCount(),
-    ]);
-
-    // Fetch all milestones
-    const milestones = [];
-    for (let i = 0; i < Number(milestoneCount); i++) {
-      const m = await escrow.getMilestone(i);
-      milestones.push({
-        index: i,
-        platform: Number(m.platform),
-        metricType: Number(m.metricType),
-        threshold: m.threshold.toString(),
-        trancheAmount: m.trancheAmount.toString(),
-        deadline: Number(m.deadline),
-        contentId: m.contentId,
-        ipfsProofHash: m.ipfsProofHash,
-        status: Number(m.status), // 0=PENDING, 1=MET, 2=FAILED
-      });
-    }
-
-    return {
-      campaignId: Number(campaignId),
-      escrowAddress,
-      brand,
-      creator,
-      ipfsBriefHash,
-      totalDeposit: totalDeposit.toString(),
-      totalReleased: totalReleased.toString(),
-      isFinalized,
-      milestones,
-      balance: (await escrow.getBalance()).toString(),
-    };
-  } catch (error) {
-    console.error(`[Blockchain] Failed to get campaign state for ${escrowAddress}:`, error);
-    throw error;
-  }
-}
-
-// ─────────────────────────────────────────────
-// Proof Submission
-// ─────────────────────────────────────────────
-
-/// @notice Submits a content proof CID to the escrow contract.
-/// Called after the proof JSON has been uploaded to IPFS.
-/// NOTE: In production, this should be called by the creator's wallet
-/// directly from the frontend — not from the backend server.
-/// This backend version is for server-side automation only.
-///
-/// @param {string} escrowAddress  - Address of the CampaignEscrow
-/// @param {number} milestoneIndex - Index of the milestone
-/// @param {string} ipfsProofCid   - CID returned by Pinata upload
-/// @returns {Promise<object>}     - Transaction receipt
-
-export async function submitProofToContract(escrowAddress, milestoneIndex, ipfsProofCid) {
-  try {
-    const escrow = getCampaignEscrowWithSigner(escrowAddress);
-
-    console.log(`[Blockchain] Submitting proof to escrow ${escrowAddress}, milestone ${milestoneIndex}`);
-
-    const tx = await escrow.submitProof(milestoneIndex, ipfsProofCid);
-    const receipt = await tx.wait();
-
-    console.log(`[Blockchain] Proof submitted — tx: ${receipt.hash}`);
-    return {
-      success: true,
-      txHash: receipt.hash,
-      blockNumber: receipt.blockNumber,
-    };
-  } catch (error) {
-    console.error("[Blockchain] Failed to submit proof:", error);
-    throw error;
-  }
-}
-
-// ─────────────────────────────────────────────
-// Reputation Token Queries
-// ─────────────────────────────────────────────
-
-/// @notice Fetches the full reputation history for a creator wallet
-/// @param {string} walletAddress - Creator's wallet address
-/// @returns {Promise<object>} - Reputation score and mint history
-
-export async function getCreatorReputation(walletAddress) {
-  try {
-    const token = getReputationToken();
-
-    const [score, history] = await Promise.all([
-      token.reputationScore(walletAddress),
-      token.getMintHistory(walletAddress),
-    ]);
-
-    return {
-      walletAddress,
-      reputationScore: Number(score),
-      mintHistory: history.map((record) => ({
-        campaignId: Number(record.campaignId),
-        milestoneIndex: Number(record.milestoneIndex),
-        tokenId: record.tokenId.toString(),
-        mintedAt: Number(record.mintedAt),
-      })),
-    };
-  } catch (error) {
-    console.error(`[Blockchain] Failed to get reputation for ${walletAddress}:`, error);
-    throw error;
-  }
-}
-
-// ─────────────────────────────────────────────
-// Event Listener — On-chain Sync
-// ─────────────────────────────────────────────
-
-/// @notice Listens to MilestoneMet and MilestoneFailed events from an escrow.
-/// Used by the webhook handler to sync Supabase state in real time.
-/// @param {string} escrowAddress - Escrow contract to listen to
-/// @param {function} onEvent     - Callback called with event data
-
-export function listenToEscrowEvents(escrowAddress, onEvent) {
   const escrow = getCampaignEscrow(escrowAddress);
 
-  escrow.on("MilestoneMet", (campaignId, milestoneIndex, verifiedValue, trancheReleased) => {
-    onEvent({
-      type: "MilestoneMet",
-      campaignId: Number(campaignId),
-      milestoneIndex: Number(milestoneIndex),
-      verifiedValue: verifiedValue.toString(),
-      trancheReleased: trancheReleased.toString(),
-    });
-  });
+  const [
+    campaignId,
+    brand,
+    creator,
+    ipfsBriefHash,
+    totalDeposit,
+    totalReleased,
+    isFinalized,
+    isCancelled,
+    balance,
+    milestones,
+  ] = await Promise.all([
+    escrow.campaignId(),
+    escrow.brand(),
+    escrow.creator(),
+    escrow.ipfsBriefHash(),
+    escrow.totalDeposit(),
+    escrow.totalReleased(),
+    escrow.isFinalized(),
+    escrow.isCancelled(),
+    escrow.getBalance(),
+    readMilestones(escrowAddress),
+  ]);
 
-  escrow.on("MilestoneFailed", (campaignId, milestoneIndex, trancheRefunded) => {
-    onEvent({
-      type: "MilestoneFailed",
-      campaignId: Number(campaignId),
-      milestoneIndex: Number(milestoneIndex),
-      trancheRefunded: trancheRefunded.toString(),
-    });
-  });
+  return {
+    campaignId: Number(campaignId),
+    escrowAddress,
+    brand,
+    creator: creator === ethers.ZeroAddress ? null : creator,
+    ipfsBriefHash,
+    totalDeposit: totalDeposit.toString(),
+    totalReleased: totalReleased.toString(),
+    isFinalized,
+    isCancelled,
+    balance: balance.toString(),
+    milestones,
+  };
+}
 
-  escrow.on("CampaignFinalized", (campaignId, remainderRefunded) => {
-    onEvent({
-      type: "CampaignFinalized",
-      campaignId: Number(campaignId),
-      remainderRefunded: remainderRefunded.toString(),
-    });
-  });
+// ─────────────────────────────────────────────
+// Reputation
+// ─────────────────────────────────────────────
 
-  console.log(`[Blockchain] Listening to events on escrow ${escrowAddress}`);
+export async function getCreatorReputation(walletAddress) {
+  const token = getReputationToken();
+
+  const [[milestones, earned, uniqueBrands], history] = await Promise.all([
+    token.getReputation(walletAddress),
+    token.getMintHistory(walletAddress),
+  ]);
+
+  return {
+    walletAddress,
+    reputationScore: Number(milestones),
+    totalEarned: earned.toString(),
+    uniqueBrandCount: Number(uniqueBrands),
+    mintHistory: history.map((record) => ({
+      campaignId: Number(record.campaignId),
+      milestoneIndex: Number(record.milestoneIndex),
+      tokenId: record.tokenId.toString(),
+      mintedAt: Number(record.mintedAt),
+      escrow: record.escrow,
+      brand: record.brand,
+      value: record.value.toString(),
+    })),
+  };
 }

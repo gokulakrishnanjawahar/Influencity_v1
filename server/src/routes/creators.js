@@ -73,6 +73,8 @@ router.get("/:address", async (req, res, next) => {
         totalTokens: reputationData.length,
         // On-chain reputation score from ReputationToken contract
         onChainScore: onChainData?.reputationScore || 0,
+        totalEarnedUsdc: onChainData?.totalEarned || "0",
+        uniqueBrandCount: onChainData?.uniqueBrandCount || 0,
         onChainHistory: onChainData?.mintHistory || [],
       },
     });
@@ -142,6 +144,8 @@ router.get("/:address/reputation", async (req, res, next) => {
       walletAddress,
       totalTokens: events.length,
       onChainScore: onChain?.reputationScore || 0,
+      totalEarnedUsdc: onChain?.totalEarned || "0",
+      uniqueBrandCount: onChain?.uniqueBrandCount || 0,
       events,
       onChainHistory: onChain?.mintHistory || [],
     });

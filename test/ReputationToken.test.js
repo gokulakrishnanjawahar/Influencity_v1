@@ -13,14 +13,19 @@ describe("ReputationToken", async () => {
   let escrowMock;
   let creator;
   let other;
+  let brand;
+  let otherBrand;
+  let otherEscrow;
 
   const BASE_URI = "https://w3s.link/ipfs/";
+  const VALUE = 100_000_000n; // 100 USDC
 
   async function deployAll() {
     const connection = await hre.network.connect();
     ethers = connection.ethers;
 
-    [owner, escrowMock, creator, other] = await ethers.getSigners();
+    [owner, escrowMock, creator, other, brand, otherBrand, otherEscrow] =
+      await ethers.getSigners();
 
     const ReputationToken = await ethers.getContractFactory("ReputationToken");
     reputationToken = await ReputationToken.deploy(BASE_URI);
@@ -118,20 +123,20 @@ describe("ReputationToken", async () => {
     });
 
     it("mints token to creator on milestone completion", async () => {
-      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1);
+      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE);
       assert.equal(await reputationToken.reputationScore(creator.address), 1n);
     });
 
     it("increments reputation score on each mint", async () => {
-      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1);
-      await reputationToken.connect(escrowMock).mint(creator.address, 1, 1);
-      await reputationToken.connect(escrowMock).mint(creator.address, 2, 1);
+      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE);
+      await reputationToken.connect(escrowMock).mint(creator.address, 1, 1, brand.address, VALUE);
+      await reputationToken.connect(escrowMock).mint(creator.address, 2, 1, brand.address, VALUE);
       assert.equal(await reputationToken.reputationScore(creator.address), 3n);
     });
 
     it("records mint history", async () => {
-      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1);
-      await reputationToken.connect(escrowMock).mint(creator.address, 1, 1);
+      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE);
+      await reputationToken.connect(escrowMock).mint(creator.address, 1, 1, brand.address, VALUE);
 
       const history = await reputationToken.getMintHistory(creator.address);
       assert.equal(history.length, 2);
@@ -140,17 +145,52 @@ describe("ReputationToken", async () => {
       assert.equal(history[1].milestoneIndex, 1n);
     });
 
-    it("creates unique token IDs per campaign+milestone combination", async () => {
-      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1);
-      await reputationToken.connect(escrowMock).mint(creator.address, 0, 2);
+    it("refuses to mint the same escrow milestone twice", async () => {
+      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE);
+      await assert.rejects(
+        reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE),
+        /already minted/
+      );
+    });
+
+    // Regression: token IDs used to be keccak(campaignId, milestoneIndex).
+    // Campaign IDs restart at 1 when the factory is redeployed, so two different
+    // escrows reporting campaign 1, milestone 0 minted the same token ID.
+    it("gives different escrows different token IDs for the same campaign ID", async () => {
+      await reputationToken.authoriseMinter(otherEscrow.address);
+      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE);
+      await reputationToken.connect(otherEscrow).mint(creator.address, 0, 1, brand.address, VALUE);
 
       const history = await reputationToken.getMintHistory(creator.address);
       assert.notEqual(history[0].tokenId, history[1].tokenId);
+      assert.equal(history[0].escrow, escrowMock.address);
+      assert.equal(history[1].escrow, otherEscrow.address);
+    });
+
+    it("derives the token ID from the escrow address and milestone index", async () => {
+      await reputationToken.connect(escrowMock).mint(creator.address, 3, 1, brand.address, VALUE);
+      const [record] = await reputationToken.getMintHistory(creator.address);
+      const expected = BigInt(
+        ethers.keccak256(
+          ethers.AbiCoder.defaultAbiCoder().encode(
+            ["address", "uint256"],
+            [escrowMock.address, 3]
+          )
+        )
+      );
+      assert.equal(record.tokenId, expected);
+    });
+
+    it("refuses to mint to the brand that paid", async () => {
+      await assert.rejects(
+        reputationToken.connect(escrowMock).mint(brand.address, 0, 1, brand.address, VALUE),
+        /creator cannot be brand/
+      );
     });
 
     it("reverts if non-authorised caller tries to mint", async () => {
       await assert.rejects(
-        reputationToken.connect(other).mint(creator.address, 0, 1),
+        reputationToken.connect(other).mint(creator.address, 0, 1, brand.address, VALUE),
         /caller is not an authorised minter/
       );
     });
@@ -159,7 +199,7 @@ describe("ReputationToken", async () => {
       await assert.rejects(
         reputationToken
           .connect(escrowMock)
-          .mint("0x0000000000000000000000000000000000000000", 0, 1),
+          .mint("0x0000000000000000000000000000000000000000", 0, 1, brand.address, VALUE),
         /mint to zero address/
       );
     });
@@ -167,7 +207,7 @@ describe("ReputationToken", async () => {
     it("emits ReputationMinted event", async () => {
       const tx = await reputationToken
         .connect(escrowMock)
-        .mint(creator.address, 0, 1);
+        .mint(creator.address, 0, 1, brand.address, VALUE);
       const receipt = await tx.wait();
       const event = receipt.logs.find(
         (log) => log.fragment && log.fragment.name === "ReputationMinted"
@@ -176,6 +216,52 @@ describe("ReputationToken", async () => {
       assert.equal(event.args.creator, creator.address);
       assert.equal(event.args.campaignId, 1n);
       assert.equal(event.args.milestoneIndex, 0n);
+    });
+  });
+
+  // ─────────────────────────────────────────────
+  // Weighted Reputation
+  // ─────────────────────────────────────────────
+  // A bare milestone count is cheap to farm with two wallets, so reputation is
+  // also reported by value earned and by how many distinct brands paid.
+
+  describe("Weighted Reputation", async () => {
+    beforeEach(async () => {
+      await deployAll();
+      await reputationToken.authoriseMinter(escrowMock.address);
+    });
+
+    it("sums the USDC earned across milestones", async () => {
+      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE);
+      await reputationToken.connect(escrowMock).mint(creator.address, 1, 1, brand.address, 50n);
+      assert.equal(await reputationToken.totalEarned(creator.address), VALUE + 50n);
+    });
+
+    it("counts each paying brand once", async () => {
+      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE);
+      await reputationToken.connect(escrowMock).mint(creator.address, 1, 1, brand.address, VALUE);
+      assert.equal(await reputationToken.uniqueBrandCount(creator.address), 1n);
+
+      await reputationToken.connect(escrowMock).mint(creator.address, 2, 1, otherBrand.address, VALUE);
+      assert.equal(await reputationToken.uniqueBrandCount(creator.address), 2n);
+    });
+
+    it("returns milestones, earnings and brands from getReputation", async () => {
+      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE);
+      await reputationToken.connect(escrowMock).mint(creator.address, 1, 1, otherBrand.address, VALUE);
+
+      const [milestones, earned, uniqueBrands] =
+        await reputationToken.getReputation(creator.address);
+      assert.equal(milestones, 2n);
+      assert.equal(earned, 2n * VALUE);
+      assert.equal(uniqueBrands, 2n);
+    });
+
+    it("records brand and value in the mint history", async () => {
+      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE);
+      const [record] = await reputationToken.getMintHistory(creator.address);
+      assert.equal(record.brand, brand.address);
+      assert.equal(record.value, VALUE);
     });
   });
 
@@ -189,7 +275,7 @@ describe("ReputationToken", async () => {
     beforeEach(async () => {
       await deployAll();
       await reputationToken.authoriseMinter(escrowMock.address);
-      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1);
+      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE);
 
       const history = await reputationToken.getMintHistory(creator.address);
       tokenId = history[0].tokenId;
@@ -229,7 +315,7 @@ describe("ReputationToken", async () => {
     beforeEach(async () => {
       await deployAll();
       await reputationToken.authoriseMinter(escrowMock.address);
-      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1);
+      await reputationToken.connect(escrowMock).mint(creator.address, 0, 1, brand.address, VALUE);
 
       const history = await reputationToken.getMintHistory(creator.address);
       tokenId = history[0].tokenId;

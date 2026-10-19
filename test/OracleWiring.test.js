@@ -87,7 +87,7 @@ describe("Oracle Wiring (deployOracle.js sequence)", async () => {
   async function liveCampaign() {
     const tx = await factory.connect(brand).createCampaign(
       IPFS_BRIEF, [0], [0], [50_000], [USDC(100)],
-      [await futureDeadline()], [VIDEO_ID]
+      [await futureDeadline()]
     );
     const receipt = await tx.wait();
     const event = receipt.logs.find((l) => l.fragment?.name === "CampaignCreated");
@@ -97,6 +97,9 @@ describe("Oracle Wiring (deployOracle.js sequence)", async () => {
     await usdc.connect(brand).approve(escrowAddress, USDC(100));
     await escrow.connect(brand).deposit(USDC(100));
     await factory.connect(brand).assignCreator(campaignId, creator.address);
+    await escrow
+      .connect(creator)
+      .submitProof(0, VIDEO_ID, "UCuAXFkgsw1L7xaCfnd5JJOw", "bafybeiproof");
 
     return { escrow, escrowAddress, campaignId };
   }
@@ -150,7 +153,6 @@ describe("Oracle Wiring (deployOracle.js sequence)", async () => {
     await handler.performUpkeep(performData);
     const requestId = await router.lastRequestId();
 
-    const before = await usdc.balanceOf(creator.address);
     await router.fulfill(
       await consumer.getAddress(),
       requestId,
@@ -158,9 +160,8 @@ describe("Oracle Wiring (deployOracle.js sequence)", async () => {
       "0x",
       { gasLimit: 1_000_000 }
     );
-    const after = await usdc.balanceOf(creator.address);
 
-    assert.equal(after - before, USDC(100));
+    assert.equal(await escrow.withdrawable(creator.address), USDC(100));
     assert.equal((await escrow.getMilestone(0)).status, 1n); // MET
     assert.equal(await reputationToken.reputationScore(creator.address), 1n);
   });

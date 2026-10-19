@@ -112,7 +112,8 @@ contract CampaignFactory {
     /// @param _thresholds      Array of numeric targets for each milestone
     /// @param _trancheAmounts  Array of USDC payout amounts for each milestone
     /// @param _deadlines       Array of unix timestamp deadlines for each milestone
-    /// @param _contentIds      Array of platform content IDs for each milestone
+    /// @dev No content IDs here: the content does not exist until the selected
+    /// creator publishes it, so the creator supplies it via submitProof().
     /// @return campaignId      The ID assigned to this campaign
     /// @return escrowAddress   The address of the deployed CampaignEscrow contract
     function createCampaign(
@@ -121,8 +122,7 @@ contract CampaignFactory {
         MilestoneLib.MetricType[] memory _metricTypes,
         uint256[] memory _thresholds,
         uint256[] memory _trancheAmounts,
-        uint256[] memory _deadlines,
-        string[] memory _contentIds
+        uint256[] memory _deadlines
     ) external returns (uint256 campaignId, address escrowAddress) {
         // Validate inputs
         require(bytes(_ipfsBriefHash).length > 0, "CampaignFactory: brief hash required");
@@ -131,8 +131,7 @@ contract CampaignFactory {
             _platforms.length == _metricTypes.length &&
             _platforms.length == _thresholds.length &&
             _platforms.length == _trancheAmounts.length &&
-            _platforms.length == _deadlines.length &&
-            _platforms.length == _contentIds.length,
+            _platforms.length == _deadlines.length,
             "CampaignFactory: milestone arrays length mismatch"
         );
 
@@ -183,8 +182,7 @@ contract CampaignFactory {
                 _metricTypes[i],
                 _thresholds[i],
                 _trancheAmounts[i],
-                _deadlines[i],
-                _contentIds[i]
+                _deadlines[i]
             );
         }
 

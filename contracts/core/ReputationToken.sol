@@ -30,8 +30,22 @@ contract ReputationToken is ERC1155, Ownable, IReputationToken {
     /// alongside the owner, so newly deployed escrows can mint automatically
     address public campaignFactory;
 
-    /// @notice Tracks total tokens minted per creator wallet
+    /// @notice Number of milestones the creator has completed
     mapping(address => uint256) public reputationScore;
+
+    /// @notice Total USDC (6 decimals) the creator has earned across milestones.
+    /// A raw milestone count is cheap to farm — one person can play brand and
+    /// creator with two wallets and a few cents of USDC — so reputation is also
+    /// reported weighted by what was actually paid.
+    mapping(address => uint256) public totalEarned;
+
+    /// @notice Number of distinct brands that have paid the creator. Farming
+    /// this needs a separate funded brand wallet per point, which makes
+    /// self-dealing visible: high milestone counts from one or two brands.
+    mapping(address => uint256) public uniqueBrandCount;
+
+    /// @notice creator => brand => whether that brand has paid the creator before
+    mapping(address => mapping(address => bool)) public hasWorkedWith;
 
     /// @notice Tracks token metadata per tokenId
     /// tokenId => IPFS metadata URI
@@ -43,6 +57,9 @@ contract ReputationToken is ERC1155, Ownable, IReputationToken {
         uint256 milestoneIndex;
         uint256 tokenId;
         uint256 mintedAt;
+        address escrow;
+        address brand;
+        uint256 value;
     }
 
     /// @notice creator wallet => list of all their mint records
@@ -57,7 +74,10 @@ contract ReputationToken is ERC1155, Ownable, IReputationToken {
         uint256 indexed campaignId,
         uint256 indexed tokenId,
         uint256 milestoneIndex,
-        uint256 mintedAt
+        uint256 mintedAt,
+        address escrow,
+        address brand,
+        uint256 value
     );
 
     event MinterAuthorised(address indexed escrowAddress);
@@ -103,32 +123,53 @@ contract ReputationToken is ERC1155, Ownable, IReputationToken {
     /// @param to             Creator wallet address
     /// @param milestoneIndex Index of the completed milestone
     /// @param campaignId     ID of the campaign
+    /// @param brand          The brand that paid for the milestone
+    /// @param value          USDC paid for the milestone (6 decimals)
     function mint(
         address to,
         uint256 milestoneIndex,
-        uint256 campaignId
+        uint256 campaignId,
+        address brand,
+        uint256 value
     ) external override onlyAuthorisedMinter {
         require(to != address(0), "ReputationToken: mint to zero address");
+        require(to != brand, "ReputationToken: creator cannot be brand");
 
-        // Derive token ID from campaign and milestone
-        // This gives each milestone across all campaigns a unique token type
-        uint256 tokenId = _deriveTokenId(campaignId, milestoneIndex);
+        // Keyed on the calling escrow, not the campaign ID. Campaign IDs restart
+        // at 1 whenever the factory is redeployed, so (campaignId, milestone)
+        // would collide with tokens minted under the previous factory.
+        uint256 tokenId = _deriveTokenId(msg.sender, milestoneIndex);
+        require(balanceOf(to, tokenId) == 0, "ReputationToken: already minted");
 
-        // Mint 1 token of this type to the creator
         _mint(to, tokenId, 1, "");
 
-        // Update reputation score
         reputationScore[to]++;
+        totalEarned[to] += value;
+        if (!hasWorkedWith[to][brand]) {
+            hasWorkedWith[to][brand] = true;
+            uniqueBrandCount[to]++;
+        }
 
-        // Record mint history
         mintHistory[to].push(MintRecord({
             campaignId: campaignId,
             milestoneIndex: milestoneIndex,
             tokenId: tokenId,
-            mintedAt: block.timestamp
+            mintedAt: block.timestamp,
+            escrow: msg.sender,
+            brand: brand,
+            value: value
         }));
 
-        emit ReputationMinted(to, campaignId, tokenId, milestoneIndex, block.timestamp);
+        emit ReputationMinted(
+            to,
+            campaignId,
+            tokenId,
+            milestoneIndex,
+            block.timestamp,
+            msg.sender,
+            brand,
+            value
+        );
     }
 
     /// @notice Sets the IPFS metadata URI for a specific token ID.
@@ -199,6 +240,18 @@ contract ReputationToken is ERC1155, Ownable, IReputationToken {
     // View Functions
     // ─────────────────────────────────────────────
 
+    /// @notice Returns the creator's reputation in one call
+    /// @return milestones   Milestones completed
+    /// @return earned       Total USDC earned (6 decimals)
+    /// @return uniqueBrands Distinct brands that have paid the creator
+    function getReputation(address creator)
+        external
+        view
+        returns (uint256 milestones, uint256 earned, uint256 uniqueBrands)
+    {
+        return (reputationScore[creator], totalEarned[creator], uniqueBrandCount[creator]);
+    }
+
     /// @notice Returns full mint history for a creator wallet
     function getMintHistory(address creator) external view returns (MintRecord[] memory) {
         return mintHistory[creator];
@@ -218,12 +271,12 @@ contract ReputationToken is ERC1155, Ownable, IReputationToken {
     // Internal Helpers
     // ─────────────────────────────────────────────
 
-    /// @notice Derives a unique token ID from campaign ID and milestone index.
-    /// Uses hashing to avoid collisions across campaigns.
+    /// @notice Derives a unique token ID from the escrow address and milestone
+    /// index. Escrow addresses never repeat, so neither do token IDs.
     function _deriveTokenId(
-        uint256 campaignId,
+        address escrow,
         uint256 milestoneIndex
     ) internal pure returns (uint256) {
-        return uint256(keccak256(abi.encodePacked(campaignId, milestoneIndex)));
+        return uint256(keccak256(abi.encode(escrow, milestoneIndex)));
     }
 }

@@ -8,10 +8,14 @@ interface IReputationToken {
     /// @param to            Creator wallet address
     /// @param milestoneIndex Index of the completed milestone (used to derive token ID)
     /// @param campaignId    ID of the campaign this milestone belongs to
+    /// @param brand         The brand that paid for the milestone
+    /// @param value         USDC paid for the milestone (6 decimals)
     function mint(
         address to,
         uint256 milestoneIndex,
-        uint256 campaignId
+        uint256 campaignId,
+        address brand,
+        uint256 value
     ) external;
 
     /// @notice Authorises a CampaignEscrow contract to mint reputation tokens

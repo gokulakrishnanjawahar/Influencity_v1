@@ -41,9 +41,9 @@ export const MILESTONE_STATUS = {
 
 // Platform metric options for Create Campaign form
 export const PLATFORM_METRICS = {
-  YOUTUBE: ["VIEWS", "FOLLOWERS", "WATCH_TIME"],
+  YOUTUBE: ["VIEWS", "FOLLOWERS"],
   TWITCH: ["CONCURRENT_VIEWERS", "FOLLOWERS", "VIEWS"],
-  LINKEDIN: ["VIEWS", "CLICKS", "FOLLOWERS"],
+  LINKEDIN: ["VIEWS", "CLICKS"],
 };
 
 // USDC decimals

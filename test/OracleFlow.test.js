@@ -32,6 +32,8 @@ describe("End-to-End Oracle Flow", async () => {
   const IPFS_BRIEF = "bafybeibriefhashXYZ";
   const IPFS_PROOF = "bafybeicproofhashXYZ";
   const VIDEO_ID = "dQw4w9WgXcQ";
+  const CHANNEL_ID = "UCuAXFkgsw1L7xaCfnd5JJOw";
+  const GRACE_PERIOD = 2 * 24 * 60 * 60; // MilestoneLib.GRACE_PERIOD
 
   const USDC = (amount) => BigInt(amount) * 1_000_000n;
 
@@ -80,8 +82,8 @@ describe("End-to-End Oracle Flow", async () => {
     await usdc.connect(brand).faucet(USDC(1000));
   }
 
-  // Runs the full setup: create listing → fund → bind creator.
-  // Returns the escrow contract instance.
+  // Runs the full setup: create listing → fund → bind creator → creator names
+  // the content for every milestone. Returns the escrow contract instance.
   async function openFundedCampaign({ thresholds, tranches, deadlines }) {
     const count = thresholds.length;
     const tx = await factory.connect(brand).createCampaign(
@@ -90,8 +92,7 @@ describe("End-to-End Oracle Flow", async () => {
       Array(count).fill(METRIC_VIEWS),
       thresholds,
       tranches,
-      deadlines,
-      Array(count).fill(VIDEO_ID)
+      deadlines
     );
 
     const receipt = await tx.wait();
@@ -109,6 +110,11 @@ describe("End-to-End Oracle Flow", async () => {
 
     // Brand selects the creator — this is what forms the agreement
     await factory.connect(brand).assignCreator(campaignId, creator.address);
+
+    // Creator publishes and names the content the oracle should measure
+    for (let i = 0; i < count; i++) {
+      await escrow.connect(creator).submitProof(i, VIDEO_ID, CHANNEL_ID, IPFS_PROOF);
+    }
 
     return escrow;
   }
@@ -136,29 +142,28 @@ describe("End-to-End Oracle Flow", async () => {
       );
     });
 
-    it("full flow: create → deposit → assign → proof → oracle → release", async () => {
-      // Creator submits content proof
-      await escrow.connect(creator).submitProof(0, IPFS_PROOF);
-
+    it("full flow: create → deposit → assign → proof → oracle → withdraw", async () => {
+      // The fixture's creator named the content to measure
       const milestone = await escrow.getMilestone(0);
+      assert.equal(milestone.contentId, VIDEO_ID);
+      assert.equal(milestone.channelId, CHANNEL_ID);
       assert.equal(milestone.ipfsProofHash, IPFS_PROOF);
-
-      // Record balances before oracle verification
-      const creatorBalanceBefore = await usdc.balanceOf(creator.address);
 
       // Oracle verifies metric — 75k views beats 50k threshold
       await mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000);
 
-      // Verify tranche released to creator
+      // Milestone marked as MET and the tranche credited to the creator
+      assert.equal((await escrow.getMilestone(0)).status, 1n); // MET
+      assert.equal(await escrow.withdrawable(creator.address), USDC(500));
+
+      // Creator collects
+      const creatorBalanceBefore = await usdc.balanceOf(creator.address);
+      await escrow.connect(creator).withdraw(creator.address);
       const creatorBalanceAfter = await usdc.balanceOf(creator.address);
       assert.equal(creatorBalanceAfter - creatorBalanceBefore, USDC(500));
 
-      // Verify escrow is now empty
+      // Escrow is now empty
       assert.equal(await usdc.balanceOf(await escrow.getAddress()), 0n);
-
-      // Verify milestone marked as MET
-      const updatedMilestone = await escrow.getMilestone(0);
-      assert.equal(updatedMilestone.status, 1n); // MET
     });
 
     it("mints reputation token to creator on milestone completion", async () => {
@@ -177,13 +182,10 @@ describe("End-to-End Oracle Flow", async () => {
     });
 
     it("does not release if metric below threshold", async () => {
-      const creatorBalanceBefore = await usdc.balanceOf(creator.address);
-
       // Only 30k views — below 50k threshold
       await mockOracle.submitMetric(await escrow.getAddress(), 0, 30_000);
 
-      const creatorBalanceAfter = await usdc.balanceOf(creator.address);
-      assert.equal(creatorBalanceAfter, creatorBalanceBefore);
+      assert.equal(await escrow.withdrawable(creator.address), 0n);
 
       // Milestone still pending
       const milestone = await escrow.getMilestone(0);
@@ -197,11 +199,9 @@ describe("End-to-End Oracle Flow", async () => {
       assert.equal(milestone.status, 0n); // still PENDING
 
       // Second check — threshold met
-      const creatorBalanceBefore = await usdc.balanceOf(creator.address);
       await mockOracle.submitMetric(await escrow.getAddress(), 0, 60_000);
 
-      const creatorBalanceAfter = await usdc.balanceOf(creator.address);
-      assert.equal(creatorBalanceAfter - creatorBalanceBefore, USDC(500));
+      assert.equal(await escrow.withdrawable(creator.address), USDC(500));
 
       milestone = await escrow.getMilestone(0);
       assert.equal(milestone.status, 1n); // MET
@@ -225,8 +225,7 @@ describe("End-to-End Oracle Flow", async () => {
         [METRIC_VIEWS],
         [THRESHOLD_50K],
         [USDC(500)],
-        [await futureDeadline()],
-        [VIDEO_ID]
+        [await futureDeadline()]
       );
       const receipt = await tx.wait();
       const event = receipt.logs.find(
@@ -282,21 +281,17 @@ describe("End-to-End Oracle Flow", async () => {
     });
 
     it("releases tranches independently per milestone", async () => {
-      // Milestone 0 — 75k views meets 50k threshold → 100 USDC released
-      const before = await usdc.balanceOf(creator.address);
+      // Milestone 0 — 75k views meets 50k threshold → 100 USDC credited
       await mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000);
-      const after = await usdc.balanceOf(creator.address);
-      assert.equal(after - before, USDC(100));
+      assert.equal(await escrow.withdrawable(creator.address), USDC(100));
 
       // Milestone 1 still pending
       const m1 = await escrow.getMilestone(1);
       assert.equal(m1.status, 0n); // PENDING
 
-      // Milestone 1 — 120k views meets 100k threshold → 200 USDC released
-      const before2 = await usdc.balanceOf(creator.address);
+      // Milestone 1 — 120k views meets 100k threshold → 200 more credited
       await mockOracle.submitMetric(await escrow.getAddress(), 1, 120_000);
-      const after2 = await usdc.balanceOf(creator.address);
-      assert.equal(after2 - before2, USDC(200));
+      assert.equal(await escrow.withdrawable(creator.address), USDC(300));
     });
 
     it("mints separate reputation tokens per milestone", async () => {
@@ -312,8 +307,6 @@ describe("End-to-End Oracle Flow", async () => {
     });
 
     it("batch oracle submission works correctly", async () => {
-      const before = await usdc.balanceOf(creator.address);
-
       // Submit all 3 milestones in one batch call
       await mockOracle.submitMetricBatch(
         await escrow.getAddress(),
@@ -321,8 +314,8 @@ describe("End-to-End Oracle Flow", async () => {
         [75_000, 120_000, 250_000]
       );
 
-      const after = await usdc.balanceOf(creator.address);
-      assert.equal(after - before, USDC(600)); // All 3 tranches released
+      // All 3 tranches credited
+      assert.equal(await escrow.withdrawable(creator.address), USDC(600));
     });
   });
 
@@ -342,15 +335,16 @@ describe("End-to-End Oracle Flow", async () => {
       });
     });
 
-    it("refunds brand when deadline passes and metric not met", async () => {
-      // Time travel past deadline
-      await advanceTime(120);
+    it("refunds brand when the grace window closes and metric not met", async () => {
+      // Time travel past the deadline and the oracle grace window
+      await advanceTime(120 + GRACE_PERIOD);
+
+      // Oracle submits below threshold
+      await mockOracle.submitMetric(await escrow.getAddress(), 0, 10_000);
+      assert.equal(await escrow.withdrawable(brand.address), USDC(500));
 
       const brandBefore = await usdc.balanceOf(brand.address);
-
-      // Oracle submits below threshold after deadline
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 10_000);
-
+      await escrow.connect(brand).withdraw(brand.address);
       const brandAfter = await usdc.balanceOf(brand.address);
       assert.equal(brandAfter - brandBefore, USDC(500));
 
@@ -359,7 +353,7 @@ describe("End-to-End Oracle Flow", async () => {
     });
 
     it("does not mint reputation token on failed milestone", async () => {
-      await advanceTime(120);
+      await advanceTime(120 + GRACE_PERIOD);
       await mockOracle.submitMetric(await escrow.getAddress(), 0, 10_000);
 
       const score = await reputationToken.reputationScore(creator.address);
@@ -389,24 +383,21 @@ describe("End-to-End Oracle Flow", async () => {
       // Milestone 0 met immediately
       await mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000);
 
-      // Time travel — milestone 1 deadline passes
-      await advanceTime(120);
+      // Time travel — milestone 1's deadline and grace window pass
+      await advanceTime(120 + GRACE_PERIOD);
 
-      const brandBefore = await usdc.balanceOf(brand.address);
-      const creatorBefore = await usdc.balanceOf(creator.address);
-
-      // Finalize — milestone 1 fails, refunded to brand
+      // Finalize — milestone 1 fails, credited back to brand
       await escrow.connect(brand).finalizeCampaign();
 
-      const brandAfter = await usdc.balanceOf(brand.address);
-      const creatorAfter = await usdc.balanceOf(creator.address);
-
-      // Creator got 200 USDC from milestone 0
-      assert.equal(creatorAfter - creatorBefore, 0n); // already released earlier
-      // Brand got back 200 USDC from failed milestone 1
-      assert.equal(brandAfter - brandBefore, USDC(200));
-
+      // Creator is owed 200 USDC from milestone 0, the brand 200 from milestone 1
+      assert.equal(await escrow.withdrawable(creator.address), USDC(200));
+      assert.equal(await escrow.withdrawable(brand.address), USDC(200));
       assert.equal(await escrow.isFinalized(), true);
+
+      // Both collect, and the escrow ends empty
+      await escrow.connect(creator).withdraw(creator.address);
+      await escrow.connect(brand).withdraw(brand.address);
+      assert.equal(await usdc.balanceOf(await escrow.getAddress()), 0n);
     });
   });
 });

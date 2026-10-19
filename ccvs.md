@@ -8,83 +8,96 @@
 > **Start here:** the TO-DO block directly below. Session logs and status
 > detail follow it.
 
-# ▶ TO-DO — start here (2026-09-25)
+# ▶ TO-DO — start here (2026-10-19)
 
-Everything that can be done without a deployment is done. The contracts are
-hardened (156 tests green), the server, frontend, database and env are ready.
+The 2026-10-19 session fixed seven contract bugs and three backend security
+holes (list below). **The contracts on Amoy are now the OLD version** — the
+client and server expect the new ABIs, so nothing works end to end until
+the contracts are redeployed. Tests: 191 passing (was 156).
 
-## 1. Deploy (you can do this NOW)
+## 1. Get ~0.16 POL more, then redeploy
 
-Wallet `0xc4B0fb7d23e59fD49259F6244F15047A518DDCc5` holds **0.2 POL**, and the
-deploy costs **0.173 POL at 25 gwei** — it fits. Do not chase more faucet POL.
+The deployer `0xc4B0…DCc5` holds **0.026 POL**; the new deploy measures
+**7.35M gas ≈ 0.184 POL at 25 gwei**. Top up from the Amoy faucet, then:
 
 ```bash
 AMOY_GAS_PRICE_GWEI=25 npx hardhat run scripts/deploy.js --network polygonAmoy
 ```
 
-**The gas flag matters.** Amoy's *suggested* price spikes erratically — 446 gwei
-observed against a ~25-30 gwei floor — which would quote the deploy at 3 POL and
-fail. `AMOY_GAS_PRICE_GWEI` pins it (added to `hardhat.config.js`); the tx just
-takes slightly longer to mine, which costs nothing on a testnet. If it is
-rejected as underpriced, retry at 26 or 27.
+The script now also prints `INDEXER_START_BLOCK` (saved to deployments.json).
 
-## 2. Paste the printed addresses
+## 2. Paste the new values
 
-The script prints two blocks. All seven values are currently blank:
+- root `.env` → the four addresses + `INDEXER_START_BLOCK`
+  (`SESSION_SECRET` and `CHAIN_ID` were already added locally)
+- `client/.env.local` → the three `VITE_` addresses
+- README "Deployed contracts" table → new addresses
 
-- root `.env` → `CAMPAIGN_FACTORY_ADDRESS`, `REPUTATION_TOKEN_ADDRESS`,
-  `USDC_ADDRESS`, `MOCK_METRICS_ORACLE_ADDRESS`
-- `client/.env.local` → `VITE_CAMPAIGN_FACTORY_ADDRESS`,
-  `VITE_REPUTATION_TOKEN_ADDRESS`, `VITE_USDC_ADDRESS`
+## 3. Run the Supabase migration
 
-`VITE_USDC_ADDRESS` has no fallback — the client logs an error without it.
+`supabase/migrations/003_auth_and_indexer.sql` in the SQL editor — adds
+`auth_nonces`, `sync_state`, `milestones.channel_id`, reputation dedupe keys.
 
-## 3. Fix MetaMask's RPC (if not already done)
+## 4. Vercel server env (when deploying)
 
-MetaMask is still on `rpc-amoy.polygon.technology`, which is **dead** — that is
-why it shows no balance and why two days went into re-claiming POL that had
-already arrived. Edit the Amoy network → RPC URL →
-`https://polygon-amoy-bor-rpc.publicnode.com`
+Set: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `PINATA_JWT`, `PINATA_GATEWAY`,
+`RPC_URL`, `CAMPAIGN_FACTORY_ADDRESS`, `REPUTATION_TOKEN_ADDRESS`,
+`INDEXER_START_BLOCK`, `SESSION_SECRET` (new random value), `CHAIN_ID=80002`,
+`CLIENT_URL` (the frontend URL — SIWE only accepts that host).
+**Do not set `PRIVATE_KEY`** — the server no longer signs anything.
+`WEBHOOK_SECRET` is gone with the webhook route.
 
-## 4. Smoke test
+## 5. Smoke test (changed flow)
 
-```bash
-cd server && npm run dev     # :3001
-cd client && npm run dev     # :5173
-```
+create → apply → select → creator submits proof (content URL + channel ID;
+their channel description must contain their wallet for the real oracle) →
+`MockMetricsOracle.submitMetric(escrow, 0, 75000)` → creator sees "USDC ready
+to withdraw" → Withdraw. Check `/sync` updates Supabase.
 
-Connect wallet → **Get test USDC** button in the Dashboard header → create
-campaign → apply from a second wallet → select → submit proof →
-`MockMetricsOracle.submitMetric(escrow, 0, 75000)` → confirm USDC lands and the
-reputation NFT mints.
+## What changed on 2026-10-19
 
-## 5. Verify on PolygonScan (optional, good for a portfolio)
+Contracts:
+1. Oracle now sends `[contentId, metricType, channelId, creatorAddress]`;
+   consumer reads them from the escrow (`requestMetric(escrow, index)`).
+   Unmeasurable platform/metric combos rejected at creation
+   (`MilestoneLib.isSupportedMetric`; WATCH_TIME and LinkedIn FOLLOWERS gone).
+2. Content ID is set by the creator: `submitProof(i, contentId, channelId,
+   proofCid)`, once only. Factory `createCampaign` lost `_contentIds`.
+   Functions scripts check content→channel and wallet-in-channel-bio.
+3. `MilestoneMet.verifiedValue` is the oracle's value, not the threshold.
+4. Pull payments: `withdrawable[addr]` + `withdraw(to)`. Only
+   `cancelCampaign` pushes (to the caller). SafeERC20.
+5. `GRACE_PERIOD` 2 days after deadline: late readings still pay, failure
+   only after the window. Proof still due by the deadline.
+6. Reputation token ID = keccak(escrow, index); `mint` takes brand + value;
+   `totalEarned`, `uniqueBrandCount`, `getReputation()`.
+7. `finalizeCampaign` is permissionless (credits only; dead owner branch gone).
 
-Needs an Etherscan **V2** key from etherscan.io (Polygonscan V1 keys are dead).
+Backend:
+- Real SIWE: `POST /auth/nonce`, `POST /auth/verify` (viem verifySiweMessage,
+  domain allowlist, chain check, single-use nonce) → HS256 session token
+  (jose) → `Authorization: Bearer`.
+- No signer: `blockchain.js` is read-only; `PRIVATE_KEY` unused by server.
+- `/webhooks` deleted. `services/indexer.js` reads logs from the RPC with a
+  cursor in `sync_state`; triggered by `POST /sync` (client calls it after
+  each tx) and a daily Vercel cron. `/confirm`, `/select`, `/cancel` now
+  verify on-chain state instead of trusting the request.
 
-```bash
-npx hardhat run scripts/verify.js --network polygonAmoy
-```
+Not verified live: the Functions scripts were tested against faked API
+responses only (no platform API keys); the LinkedIn org-description lookup
+in particular is unconfirmed against the real API.
 
 ## Later — not blocking
 
 - **Badge NFTs will not render in wallets.** Nothing calls
-  `setTokenMetadataURI` and the base URI has no `{id}` template. Needs the
-  backend to pin metadata JSON at mint time.
+  `setTokenMetadataURI` and the base URI has no `{id}` template.
 - **Seed a few campaigns** so the marketplace is not empty for visitors.
-- **Chainlink go-live:** `npm run deploy:oracle` handles every on-chain step.
-  You already hold **25 testnet LINK on Amoy**. Still needed: a Functions
-  subscription with the consumer added, DON-hosted secrets for the platform API
-  keys, a registered Automation upkeep, then `setForwarder`.
-  Note: Chainlink's faucet refuses *native* POL unless you hold 1 real LINK on
-  Ethereum mainnet — testnet LINK itself is unrestricted.
-- **Hardening pass:** SafeERC20, custom errors, EIP-1167 clones (would cut the
-  3.84M gas `CampaignFactory` deploy by ~90%). Hardhat 3.17 and the
-  `hre.network.connect()` deprecation.
-- **Untested responsively:** `/dashboard` and `/campaigns/new` were only
-  measured behind their connect screens. Re-check the recharts panel and the
-  4-step wizard at 390px once you can connect a wallet. Routes measured clean
-  0-overflow at 320-1440px otherwise.
+- **Chainlink go-live:** `npm run deploy:oracle`; 25 testnet LINK held.
+  Needs a Functions subscription, DON-hosted secrets, an Automation upkeep,
+  then `setForwarder`. Upload the NEW Functions scripts via `setSourceCode`.
+- Section 3 of the improvement list (Foundry invariants, Slither, clones,
+  permit, multisig, ERC-5192, dispute path, multi-chain) and section 4
+  (TypeScript, smart wallets, SDK, monitoring, e2e, CI).
 
 ---
 

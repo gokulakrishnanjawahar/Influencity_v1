@@ -15,16 +15,19 @@ import {
   getCampaignByContract,
   getCampaignsForWallet,
   createMilestones,
-  updateMilestoneProof,
   createContentProof,
   getOrCreateUser,
   getOpenCampaigns,
   createApplication,
   getApplicationsForCampaign,
-  getApplication,
   selectApplicant,
   cancelCampaignRecord,
 } from "../services/supabase.js";
+import {
+  getCampaignEscrow,
+  getCampaignFactory,
+  getCampaignState,
+} from "../services/blockchain.js";
 import { requireAuth, optionalAuth } from "../middleware/auth.js";
 
 const router = express.Router();
@@ -59,12 +62,19 @@ router.post("/", requireAuth, async (req, res, next) => {
 
     for (let i = 0; i < milestones.length; i++) {
       const m = milestones[i];
-      // contentId is intentionally NOT required at publish time — the creator
-      // fills it in when they submit proof for that milestone.
+      // No content ID at publish time — the content does not exist until the
+      // selected creator publishes it, and they name it in submitProof.
       if (!m.platform || !m.metricType || !m.threshold ||
           !m.trancheAmount || !m.deadline) {
         return res.status(400).json({
           error: `Milestone ${i} is missing required fields`,
+        });
+      }
+      // Mirrors MilestoneLib.isSupportedMetric — fail here rather than in the
+      // wallet with a reverted transaction.
+      if (!SUPPORTED_METRICS[m.platform]?.includes(m.metricType)) {
+        return res.status(400).json({
+          error: `Milestone ${i}: ${m.metricType} cannot be measured on ${m.platform}`,
         });
       }
     }
@@ -84,7 +94,6 @@ router.post("/", requireAuth, async (req, res, next) => {
         threshold: m.threshold,
         trancheAmount: m.trancheAmount,
         deadline: m.deadline,
-        contentId: m.contentId,
       })),
       createdAt: new Date().toISOString(),
     };
@@ -104,7 +113,6 @@ router.post("/", requireAuth, async (req, res, next) => {
         thresholds: milestones.map((m) => m.threshold),
         trancheAmounts: milestones.map((m) => m.trancheAmount),
         deadlines: milestones.map((m) => m.deadline),
-        contentIds: milestones.map((m) => m.contentId),
       },
     });
   } catch (error) {
@@ -114,47 +122,48 @@ router.post("/", requireAuth, async (req, res, next) => {
 
 // ─────────────────────────────────────────────
 // POST /campaigns/confirm
-// Called AFTER the frontend successfully deploys the contract.
-// Saves the campaign + milestones to Supabase with the contract address.
+// Called AFTER the frontend successfully deploys the contract. Adds the title
+// and description, which only exist off-chain.
+//
+// Everything else — campaign ID, brand, deposit, milestones — is read from the
+// chain, not the request body, and the escrow must be one the factory actually
+// deployed. The indexer may already have created the row; this fills it in.
 // ─────────────────────────────────────────────
 
 router.post("/confirm", requireAuth, async (req, res, next) => {
   try {
-    const {
-      campaignIdOnchain,
-      brandAddress,
-      contractAddress,
-      ipfsBriefCid,
-      ipfsBriefUrl,
-      title,
-      description,
-      totalDepositUsdc,
-      milestones,
-    } = req.body;
+    const { contractAddress, ipfsBriefUrl, title, description } = req.body;
 
-    if (req.walletAddress !== brandAddress?.toLowerCase()) {
-      return res.status(403).json({ error: "Authenticated wallet must match brandAddress" });
+    if (!contractAddress || !ethers.isAddress(contractAddress)) {
+      return res.status(400).json({ error: "Valid contractAddress is required" });
     }
 
-    // Ensure the brand user exists in DB (creator is bound later on selection)
-    await getOrCreateUser(brandAddress, "brand");
+    const state = await getCampaignState(contractAddress);
 
-    // Save campaign to Supabase as an open listing
+    // An attacker-deployed contract can mimic the escrow's getters; only the
+    // factory's own registry proves this escrow is genuine.
+    const registered = await getCampaignFactory().campaignEscrows(state.campaignId);
+    if (registered.toLowerCase() !== contractAddress.toLowerCase()) {
+      return res.status(400).json({ error: "Not an escrow deployed by the CampaignFactory" });
+    }
+    if (state.brand.toLowerCase() !== req.walletAddress) {
+      return res.status(403).json({ error: "Only the campaign's brand can confirm it" });
+    }
+
+    await getOrCreateUser(state.brand, "brand");
+
     const campaign = await createCampaign({
-      campaignIdOnchain,
-      brandAddress,
+      campaignIdOnchain: state.campaignId,
+      brandAddress: state.brand,
       contractAddress,
-      ipfsBriefCid,
-      ipfsBriefUrl,
-      title,
-      description,
-      totalDepositUsdc,
+      ipfsBriefCid: state.ipfsBriefHash,
+      ipfsBriefUrl: ipfsBriefUrl || buildGatewayUrl(state.ipfsBriefHash),
+      title: title?.trim() || undefined,
+      description: description?.trim() || undefined,
+      totalDepositUsdc: state.totalDeposit,
     });
 
-    // Save milestones to Supabase
-    if (milestones && milestones.length > 0) {
-      await createMilestones(campaign.id, milestones);
-    }
+    await createMilestones(campaign.id, state.milestones);
 
     res.status(201).json({
       success: true,
@@ -251,6 +260,7 @@ router.post("/:id/proof", requireAuth, async (req, res, next) => {
       platform,
       contentUrl,
       contentId,
+      channelId,
     } = req.body;
 
     // Verify authenticated wallet is the creator
@@ -258,8 +268,10 @@ router.post("/:id/proof", requireAuth, async (req, res, next) => {
       return res.status(403).json({ error: "Authenticated wallet must match creatorAddress" });
     }
 
-    if (!platform || !contentUrl || !contentId) {
-      return res.status(400).json({ error: "platform, contentUrl and contentId are required" });
+    if (!platform || !contentUrl || !contentId || !channelId) {
+      return res.status(400).json({
+        error: "platform, contentUrl, contentId and channelId are required",
+      });
     }
 
     // Get campaign from DB
@@ -287,6 +299,7 @@ router.post("/:id/proof", requireAuth, async (req, res, next) => {
       platform,
       contentUrl,
       contentId,
+      channelId,
       submittedAt: new Date().toISOString(),
     };
 
@@ -304,16 +317,17 @@ router.post("/:id/proof", requireAuth, async (req, res, next) => {
       platform,
     });
 
-    // Update milestone proof CID in Supabase
-    await updateMilestoneProof(campaign.id, milestoneIndex, cid);
-
     res.status(201).json({
       success: true,
       ipfsProofCid: cid,
       ipfsProofUrl: url,
-      // Frontend uses these to call escrow.submitProof()
+      // Frontend uses these to call escrow.submitProof(). The milestone's
+      // content fields are written by the indexer once that transaction lands —
+      // until then they are only a claim.
       contractParams: {
         milestoneIndex,
+        contentId,
+        channelId,
         ipfsProofHash: cid,
       },
     });
@@ -416,13 +430,20 @@ router.post("/:id/select", requireAuth, async (req, res, next) => {
     if (campaign.brand_address !== brandAddress.toLowerCase()) {
       return res.status(403).json({ error: "Only the campaign brand can select a creator" });
     }
-    if (campaign.status !== "open") {
-      return res.status(400).json({ error: "Campaign already has a creator or is closed" });
+
+    // Record only what the chain confirms — otherwise anyone could mark a
+    // campaign as bound to a creator without the brand's transaction.
+    const onchainCreator = await getCampaignEscrow(campaign.contract_address).creator();
+    if (onchainCreator.toLowerCase() !== creatorAddress.toLowerCase()) {
+      return res.status(409).json({ error: "That creator is not assigned on-chain yet" });
     }
 
-    const application = await getApplication(campaign.id, creatorAddress);
-    if (!application) {
-      return res.status(404).json({ error: "That creator has not applied to this campaign" });
+    // The indexer may already have recorded it
+    if (campaign.creator_address === creatorAddress.toLowerCase()) {
+      return res.json({ success: true, campaign });
+    }
+    if (campaign.status !== "open") {
+      return res.status(400).json({ error: "Campaign already has a creator or is closed" });
     }
 
     const creator = await getOrCreateUser(creatorAddress, "creator");
@@ -456,6 +477,15 @@ router.post("/:id/cancel", requireAuth, async (req, res, next) => {
     if (campaign.brand_address !== brandAddress.toLowerCase()) {
       return res.status(403).json({ error: "Only the campaign brand can cancel it" });
     }
+
+    if (!(await getCampaignEscrow(campaign.contract_address).isCancelled())) {
+      return res.status(409).json({ error: "Campaign is not cancelled on-chain yet" });
+    }
+
+    // The indexer may already have recorded it
+    if (campaign.status === "cancelled") {
+      return res.json({ success: true, campaign });
+    }
     if (campaign.status !== "open") {
       return res.status(400).json({ error: "Only open campaigns can be cancelled" });
     }
@@ -480,6 +510,13 @@ async function resolveCampaign(idOrAddress) {
   if (Number.isNaN(parsed)) return null;
   return getCampaignByOnchainId(parsed);
 }
+
+// Must match MilestoneLib.isSupportedMetric
+const SUPPORTED_METRICS = {
+  YOUTUBE: ["VIEWS", "FOLLOWERS"],
+  TWITCH: ["VIEWS", "CONCURRENT_VIEWERS", "FOLLOWERS"],
+  LINKEDIN: ["VIEWS", "CLICKS"],
+};
 
 function platformToEnum(platform) {
   const map = { YOUTUBE: 0, TWITCH: 1, LINKEDIN: 2 };

@@ -21,8 +21,10 @@ import {
   useApplyToCampaign,
   useSelectCreator,
   useCancelCampaign,
+  useSubmitProof,
+  useWithdrawable,
+  useWithdraw,
 } from "@/hooks/useCampaign";
-import { useSIWE } from "@/components/wallet/SIWEProvider";
 import { useMilestones } from "@/hooks/useMilestones";
 import { useIPFS } from "@/hooks/useIPFS";
 import { formatUSDC, formatDeadline, truncateAddress, timeUntil, milestoneProgress } from "@/lib/utils";
@@ -43,6 +45,40 @@ const VERY_MUTED = "#444444";
 const SUCCESS = "#4ade80";
 const DANGER = "#f87171";
 const WARNING = "#fb923c";
+
+// ─────────────────────────────────────────────
+// CONTENT IDS
+// ─────────────────────────────────────────────
+// Channel-level metrics measure the creator's channel itself, so the content
+// is the channel. Everything else measures one piece of content.
+const CHANNEL_METRICS = ["FOLLOWERS", "CONCURRENT_VIEWERS"];
+
+const CHANNEL_LABELS = {
+  YOUTUBE: { label: "YouTube channel ID", placeholder: "UCxxxxxxxxxxxxxxxxxxxxxx" },
+  TWITCH: { label: "Twitch username", placeholder: "yourchannel" },
+  LINKEDIN: { label: "LinkedIn organisation URN", placeholder: "urn:li:organization:123456" },
+};
+
+/// Pulls the platform's content ID out of a pasted URL where the format allows
+function contentIdFromUrl(platform, url) {
+  try {
+    const u = new URL(url.trim());
+    if (platform === "YOUTUBE") {
+      if (u.hostname === "youtu.be") return u.pathname.slice(1);
+      if (u.searchParams.get("v")) return u.searchParams.get("v");
+      const shorts = u.pathname.match(/\/shorts\/([\w-]+)/);
+      if (shorts) return shorts[1];
+    }
+    if (platform === "TWITCH") {
+      if (u.hostname === "clips.twitch.tv") return u.pathname.slice(1);
+      const clip = u.pathname.match(/\/clip\/([\w-]+)/);
+      if (clip) return clip[1];
+    }
+  } catch {
+    // Not a URL yet — the user is still typing
+  }
+  return "";
+}
 
 // ─────────────────────────────────────────────
 // MILESTONE STATUS ICON
@@ -66,7 +102,8 @@ function MilestoneStatusIcon({ status }) {
 function MilestoneCard({ milestone, index, escrowAddress, isCreator, onProofSubmit }) {
   const [expanded, setExpanded] = useState(false);
   const [proofUrl, setProofUrl] = useState("");
-  const [contentId, setContentId] = useState(milestone.contentId || "");
+  const [contentId, setContentId] = useState("");
+  const [channelId, setChannelId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { getGatewayUrl } = useIPFS();
   const navigate = useNavigate();
@@ -77,19 +114,35 @@ function MilestoneCard({ milestone, index, escrowAddress, isCreator, onProofSubm
   );
 
   const statusKey = milestone.status?.toUpperCase() || "PENDING";
+  const platform = milestone.platform;
+  const metricType = milestone.metric_type || milestone.metricType;
+  const measuresChannel = CHANNEL_METRICS.includes(metricType);
+  const channelField = CHANNEL_LABELS[platform] || CHANNEL_LABELS.YOUTUBE;
+  // Content can be submitted once; after that the oracle is bound to it
+  const hasContent = !!(milestone.content_id || milestone.contentId);
 
   const handleProofSubmit = async () => {
+    const resolvedContentId = measuresChannel ? channelId.trim() : contentId.trim();
     if (!proofUrl.trim()) {
       toast.error("Please enter your content URL");
+      return;
+    }
+    if (!channelId.trim()) {
+      toast.error(`Please enter your ${channelField.label}`);
+      return;
+    }
+    if (!resolvedContentId) {
+      toast.error("Please enter the content ID");
       return;
     }
     setSubmitting(true);
     try {
       await onProofSubmit({
         milestoneIndex: index,
-        contentUrl: proofUrl,
-        contentId: contentId || milestone.contentId,
-        platform: milestone.platform,
+        contentUrl: proofUrl.trim(),
+        contentId: resolvedContentId,
+        channelId: channelId.trim(),
+        platform,
       });
       toast.success("Proof submitted successfully!");
       setExpanded(false);
@@ -214,8 +267,8 @@ function MilestoneCard({ milestone, index, escrowAddress, isCreator, onProofSubm
                   </a>
                 )}
 
-                {/* Proof submission — creator only, pending milestones */}
-                {isCreator && statusKey === "PENDING" && (
+                {/* Proof submission — creator only, pending, not yet submitted */}
+                {isCreator && statusKey === "PENDING" && !hasContent && (
                   <div
                     style={{
                       marginTop: 8, padding: "14px", borderRadius: 10,
@@ -227,16 +280,38 @@ function MilestoneCard({ milestone, index, escrowAddress, isCreator, onProofSubm
                     </p>
                     <input
                       value={proofUrl}
-                      onChange={(e) => setProofUrl(e.target.value)}
-                      placeholder="https://youtube.com/watch?v=..."
-                      style={{
-                        width: "100%", padding: "8px 12px",
-                        borderRadius: 8, background: SURFACE,
-                        border: `1px solid ${BORDER}`, color: TEXT,
-                        fontSize: 12, outline: "none",
-                        boxSizing: "border-box", marginBottom: 8,
+                      onChange={(e) => {
+                        setProofUrl(e.target.value);
+                        const parsed = contentIdFromUrl(platform, e.target.value);
+                        if (parsed) setContentId(parsed);
                       }}
+                      placeholder="Link to your published content"
+                      style={proofInputStyle}
                     />
+                    {!measuresChannel && (
+                      <input
+                        value={contentId}
+                        onChange={(e) => setContentId(e.target.value)}
+                        placeholder={
+                          platform === "LINKEDIN"
+                            ? "Post URN (urn:li:share:...)"
+                            : "Content ID (filled in from the link when possible)"
+                        }
+                        style={proofInputStyle}
+                      />
+                    )}
+                    <input
+                      value={channelId}
+                      onChange={(e) => setChannelId(e.target.value)}
+                      placeholder={`${channelField.label} — ${channelField.placeholder}`}
+                      style={proofInputStyle}
+                    />
+                    <p style={{ fontSize: 11, color: MUTED, lineHeight: 1.6, marginBottom: 10 }}>
+                      Before submitting, add your wallet address to your channel
+                      description. The oracle only pays out if the content is on
+                      that channel and the channel names your wallet. Content
+                      can't be changed once submitted.
+                    </p>
                     <motion.button
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
@@ -262,6 +337,70 @@ function MilestoneCard({ milestone, index, escrowAddress, isCreator, onProofSubm
         )}
       </AnimatePresence>
     </motion.div>
+  );
+}
+
+const proofInputStyle = {
+  width: "100%", padding: "8px 12px",
+  borderRadius: 8, background: SURFACE,
+  border: `1px solid ${BORDER}`, color: TEXT,
+  fontSize: 12, outline: "none",
+  boxSizing: "border-box", marginBottom: 8,
+};
+
+// ─────────────────────────────────────────────
+// COLLECT PANEL — withdraw credited USDC
+// ─────────────────────────────────────────────
+// Settled milestones credit the creator (met) or the brand (failed, plus the
+// remainder at finalization) instead of sending USDC, so neither party's
+// payout can be blocked by the other. This is where each side collects.
+
+function CollectPanel({ escrowAddress, account }) {
+  const { data: amount, refetch } = useWithdrawable(escrowAddress, account);
+  const withdraw = useWithdraw(escrowAddress);
+
+  if (!amount || amount === 0n) return null;
+
+  const handleWithdraw = async () => {
+    try {
+      await withdraw.mutateAsync();
+      toast.success("USDC sent to your wallet");
+      refetch();
+    } catch (err) {
+      toast.error(err.shortMessage || err.message || "Withdrawal failed");
+    }
+  };
+
+  return (
+    <div
+      style={{
+        background: SURFACE,
+        border: "1px solid rgba(74,222,128,0.2)",
+        borderRadius: 12,
+        padding: 16,
+      }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 700, color: TEXT, marginBottom: 6 }}>
+        ${formatUSDC(amount.toString())} USDC ready to withdraw
+      </div>
+      <p style={{ fontSize: 12, color: MUTED, lineHeight: 1.6, marginBottom: 14 }}>
+        Your share of this campaign is held in the escrow until you collect it.
+      </p>
+      <motion.button
+        whileHover={{ scale: 1.01 }}
+        whileTap={{ scale: 0.98 }}
+        onClick={handleWithdraw}
+        disabled={withdraw.isPending}
+        style={{
+          width: "100%", padding: "10px 14px", borderRadius: 8,
+          background: TEXT, color: "#000", fontWeight: 600, fontSize: 13,
+          border: "none", cursor: "pointer",
+          opacity: withdraw.isPending ? 0.6 : 1,
+        }}
+      >
+        {withdraw.isPending ? "Withdrawing..." : "Withdraw to my wallet"}
+      </motion.button>
+    </div>
   );
 }
 
@@ -877,7 +1016,6 @@ export default function CampaignDetail() {
   const { data: campaign, isLoading, error, refetch } = useCampaign(id);
   const { data: applications = [] } = useCampaignApplications(id);
   const { getGatewayUrl } = useIPFS();
-  const { ensureAuth, getAuthHeaders } = useSIWE();
 
   const milestones = campaign?.milestones || [];
   const isCreator = campaign?.creator_address?.toLowerCase() === connectedAddress?.toLowerCase();
@@ -894,27 +1032,19 @@ export default function CampaignDetail() {
   );
   const releasedUSDC = parseFloat(campaign?.total_released_usdc || 0);
 
-  const handleProofSubmit = async ({ milestoneIndex, contentUrl, contentId, platform }) => {
-    await ensureAuth();
-    const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
-    const res = await fetch(`${API_BASE}/campaigns/${id}/proof`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...getAuthHeaders() },
-      body: JSON.stringify({
-        creatorAddress: connectedAddress,
-        milestoneIndex,
-        platform,
-        contentUrl,
-        contentId,
-      }),
+  const submitProof = useSubmitProof(id);
+
+  const handleProofSubmit = async ({ milestoneIndex, contentUrl, contentId, channelId, platform }) => {
+    await submitProof.mutateAsync({
+      escrowAddress: campaign.contract_address,
+      creatorAddress: connectedAddress,
+      milestoneIndex,
+      platform,
+      contentUrl,
+      contentId,
+      channelId,
     });
-    if (!res.ok) {
-      const e = await res.json().catch(() => ({}));
-      throw new Error(e.error || "Failed to submit proof");
-    }
-    const data = await res.json();
     refetch();
-    return data;
   };
 
   const copyAddress = (text) => {
@@ -1177,6 +1307,14 @@ export default function CampaignDetail() {
 
             {/* Right — info panel */}
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+
+              {/* Collect — USDC this campaign owes the connected brand or creator */}
+              {(isBrand || isCreator) && campaign.contract_address && (
+                <CollectPanel
+                  escrowAddress={campaign.contract_address}
+                  account={connectedAddress}
+                />
+              )}
 
               {/* Apply — shown to creators on open campaigns */}
               {campaign.status === "open" && !isBrand && connectedAddress && (

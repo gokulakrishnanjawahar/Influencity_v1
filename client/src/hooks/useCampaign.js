@@ -8,6 +8,14 @@ import { useSIWE } from "@/components/wallet/SIWEProvider";
 import { parseUSDC } from "@/lib/constants";
 import { TX_CONFIRMATIONS } from "@/config/wagmi";
 
+// ─── Ask the backend to index the chain ───
+// The backend learns about on-chain changes by reading the chain, not from us.
+// Nudging it after a transaction just means it looks now instead of later.
+// Fire-and-forget: a failure only delays the database catching up.
+export function requestSync() {
+  return fetch(`${API_BASE}/sync`, { method: "POST" }).catch(() => {});
+}
+
 // ─── Fetch campaign from backend ───
 export function useCampaign(idOrAddress) {
   return useQuery({
@@ -121,7 +129,7 @@ export function useCreateCampaign() {
         const e = await res.json().catch(() => ({}));
         throw new Error(e.error || "Failed to upload campaign brief");
       }
-      const { contractParams, ipfsBriefCid, ipfsBriefUrl } = await res.json();
+      const { contractParams, ipfsBriefUrl } = await res.json();
 
       const totalAmount = contractParams.trancheAmounts.reduce(
         (sum, a) => sum + BigInt(a),
@@ -141,7 +149,6 @@ export function useCreateCampaign() {
           contractParams.thresholds.map((t) => BigInt(t)),
           contractParams.trancheAmounts.map((t) => BigInt(t)),
           contractParams.deadlines.map((d) => BigInt(d)),
-          contractParams.contentIds,
         ],
       });
       // The escrow address is read out of this receipt's logs and then written
@@ -189,27 +196,24 @@ export function useCreateCampaign() {
         confirmations: TX_CONFIRMATIONS,
       });
 
-      // 5. Confirm — persist the campaign + milestones to the backend
+      // 5. Confirm — attach the off-chain title and description. The backend
+      // reads everything else (milestones, deposit, brand) from the chain.
       report(5);
       const confirmRes = await fetch(`${API_BASE}/campaigns/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...getAuthHeaders() },
         body: JSON.stringify({
-          campaignIdOnchain,
-          brandAddress: address,
           contractAddress: escrowAddress,
-          ipfsBriefCid,
           ipfsBriefUrl,
           title: campaignData.title,
           description: campaignData.description,
-          totalDepositUsdc: totalAmount.toString(),
-          milestones: campaignData.milestones,
         }),
       });
       if (!confirmRes.ok) {
         const e = await confirmRes.json().catch(() => ({}));
         throw new Error(e.error || "Failed to save campaign");
       }
+      requestSync();
 
       return { escrowAddress, campaignIdOnchain, txHash: depositHash };
     },
@@ -281,6 +285,7 @@ export function useSelectCreator(idOrAddress) {
         hash,
         confirmations: TX_CONFIRMATIONS,
       });
+      requestSync();
 
       const res = await fetch(`${API_BASE}/campaigns/${idOrAddress}/select`, {
         method: "POST",
@@ -322,6 +327,7 @@ export function useCancelCampaign(idOrAddress) {
         hash,
         confirmations: TX_CONFIRMATIONS,
       });
+      requestSync();
 
       const res = await fetch(`${API_BASE}/campaigns/${idOrAddress}/cancel`, {
         method: "POST",
@@ -342,23 +348,105 @@ export function useCancelCampaign(idOrAddress) {
   });
 }
 
-// ─── Submit proof ───
-export function useSubmitProof(escrowAddress) {
+// ─── Submit proof (creator) ───
+// Two-step: backend pins the proof record to IPFS → creator's wallet calls
+// escrow.submitProof, which is what tells the oracle which content to measure
+// and which channel it must belong to.
+export function useSubmitProof(idOrAddress) {
+  const { getAuthHeaders, ensureAuth } = useSIWE();
   const { writeContractAsync } = useWriteContract();
+  const publicClient = usePublicClient();
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ milestoneIndex, ipfsProofCid }) => {
+    mutationFn: async ({
+      escrowAddress,
+      creatorAddress,
+      milestoneIndex,
+      platform,
+      contentUrl,
+      contentId,
+      channelId,
+    }) => {
+      await ensureAuth();
+      const res = await fetch(`${API_BASE}/campaigns/${idOrAddress}/proof`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+        body: JSON.stringify({
+          creatorAddress,
+          milestoneIndex,
+          platform,
+          contentUrl,
+          contentId,
+          channelId,
+        }),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.error || "Failed to upload proof");
+      }
+      const { contractParams } = await res.json();
+
       const hash = await writeContractAsync({
         address: escrowAddress,
         abi: CAMPAIGN_ESCROW_ABI,
         functionName: "submitProof",
-        args: [BigInt(milestoneIndex), ipfsProofCid],
+        args: [
+          BigInt(milestoneIndex),
+          contractParams.contentId,
+          contractParams.channelId,
+          contractParams.ipfsProofHash,
+        ],
+      });
+      await publicClient.waitForTransactionReceipt({
+        hash,
+        confirmations: TX_CONFIRMATIONS,
+      });
+      await requestSync();
+      return hash;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["campaign", idOrAddress] });
+    },
+  });
+}
+
+// ─── USDC the connected wallet can collect from an escrow ───
+// Settled milestones credit balances rather than sending USDC, so a creator's
+// earnings and a brand's refunds both wait here until withdrawn.
+export function useWithdrawable(escrowAddress, account) {
+  return useReadContract({
+    address: escrowAddress,
+    abi: CAMPAIGN_ESCROW_ABI,
+    functionName: "withdrawable",
+    args: [account],
+    query: { enabled: !!escrowAddress && !!account, staleTime: 15_000 },
+  });
+}
+
+// ─── Collect withdrawable USDC ───
+export function useWithdraw(escrowAddress) {
+  const { writeContractAsync } = useWriteContract();
+  const publicClient = usePublicClient();
+  const queryClient = useQueryClient();
+  const { address } = useAccount();
+
+  return useMutation({
+    mutationFn: async () => {
+      const hash = await writeContractAsync({
+        address: escrowAddress,
+        abi: CAMPAIGN_ESCROW_ABI,
+        functionName: "withdraw",
+        args: [address],
+      });
+      await publicClient.waitForTransactionReceipt({
+        hash,
+        confirmations: TX_CONFIRMATIONS,
       });
       return hash;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["campaign", escrowAddress] });
+      queryClient.invalidateQueries();
     },
   });
 }

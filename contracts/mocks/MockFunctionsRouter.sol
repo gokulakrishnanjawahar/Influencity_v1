@@ -23,6 +23,10 @@ contract MockFunctionsRouter {
     /// @notice The most recent request ID handed out
     bytes32 public lastRequestId;
 
+    /// @notice CBOR payload of the last request — lets tests check which
+    /// arguments the consumer actually sent to the DON
+    bytes public lastRequestData;
+
     event RequestSent(
         bytes32 indexed requestId,
         uint64 subscriptionId,
@@ -33,7 +37,7 @@ contract MockFunctionsRouter {
     /// FunctionsClient._sendRequest actually calls.
     function sendRequest(
         uint64 subscriptionId,
-        bytes calldata /* data */,
+        bytes calldata data,
         uint16 /* dataVersion */,
         uint32 callbackGasLimit,
         bytes32 /* donId */
@@ -41,6 +45,7 @@ contract MockFunctionsRouter {
         requestCount++;
         requestId = keccak256(abi.encodePacked(msg.sender, requestCount));
         lastRequestId = requestId;
+        lastRequestData = data;
 
         emit RequestSent(requestId, subscriptionId, callbackGasLimit);
     }

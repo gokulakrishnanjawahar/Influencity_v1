@@ -8,6 +8,7 @@ import hre from "hardhat";
 
 const USDC = (amount) => BigInt(amount) * 1_000_000n;
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const GRACE_PERIOD = 2 * 24 * 60 * 60; // MilestoneLib.GRACE_PERIOD
 
 // ─────────────────────────────────────────────
 // CampaignEscrow Tests
@@ -19,6 +20,7 @@ describe("CampaignEscrow", async () => {
   let reputationToken;
   let mockOracle;
   let escrow;
+  let escrowAddress;
   let brand;
   let creator;
   let other;
@@ -28,6 +30,7 @@ describe("CampaignEscrow", async () => {
   const THRESHOLD = 50_000;
   const TRANCHE = USDC(100);
   const CONTENT_ID = "dQw4w9WgXcQ";
+  const CHANNEL_ID = "UCuAXFkgsw1L7xaCfnd5JJOw";
   const IPFS_BRIEF = "bafybeibriefhash";
   const IPFS_PROOF = "bafybeicproofhash";
 
@@ -46,7 +49,9 @@ describe("CampaignEscrow", async () => {
 
     [brand, creator, other] = await ethers.getSigners();
 
-    const MockUSDC = await ethers.getContractFactory("MockUSDC");
+    // The blacklisting variant behaves exactly like MockUSDC until an address
+    // is blacklisted, so every test runs against it.
+    const MockUSDC = await ethers.getContractFactory("MockBlacklistUSDC");
     usdc = await MockUSDC.deploy();
 
     const ReputationToken = await ethers.getContractFactory("ReputationToken");
@@ -70,10 +75,11 @@ describe("CampaignEscrow", async () => {
       await mockOracle.getAddress(),
       IPFS_BRIEF
     );
+    escrowAddress = await escrow.getAddress();
 
-    await reputationToken.authoriseMinter(await escrow.getAddress());
+    await reputationToken.authoriseMinter(escrowAddress);
     await usdc.connect(brand).faucet(USDC(1000));
-    await usdc.connect(brand).approve(await escrow.getAddress(), USDC(1000));
+    await usdc.connect(brand).approve(escrowAddress, USDC(1000));
   }
 
   // A campaign must be funded before a creator can be bound to it — binding a
@@ -90,10 +96,31 @@ describe("CampaignEscrow", async () => {
     await escrow.connect(brand).assignCreator(creator.address);
   }
 
-  // Helper to advance time on the local Hardhat network
+  async function addMilestone({ tranche = TRANCHE, deadlineIn = 86400 } = {}) {
+    await escrow.addMilestone(
+      PLATFORM, METRIC_TYPE, THRESHOLD, tranche, await futureDeadline(deadlineIn)
+    );
+  }
+
+  async function submitProof(index = 0) {
+    await escrow.connect(creator).submitProof(index, CONTENT_ID, CHANNEL_ID, IPFS_PROOF);
+  }
+
+  // A milestone the oracle can be asked about: added, and content submitted
+  async function liveMilestone(opts) {
+    await addMilestone(opts);
+    const index = Number(await escrow.getMilestoneCount()) - 1;
+    await submitProof(index);
+    return index;
+  }
+
   async function advanceTime(seconds) {
     await ethers.provider.send("evm_increaseTime", [seconds]);
     await ethers.provider.send("evm_mine", []);
+  }
+
+  function findEvent(receipt, name) {
+    return receipt.logs.find((log) => log.fragment && log.fragment.name === name);
   }
 
   // ─────────────────────────────────────────────
@@ -139,9 +166,7 @@ describe("CampaignEscrow", async () => {
 
       assert.equal(await escrow.creator(), creator.address);
 
-      const event = receipt.logs.find(
-        (log) => log.fragment && log.fragment.name === "CreatorAssigned"
-      );
+      const event = findEvent(receipt, "CreatorAssigned");
       assert.ok(event, "CreatorAssigned event not emitted");
       assert.equal(event.args.creator, creator.address);
     });
@@ -218,31 +243,134 @@ describe("CampaignEscrow", async () => {
   describe("Add Milestone", async () => {
     beforeEach(() => deployFunded());
 
-    it("adds a milestone successfully", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(), CONTENT_ID
-      );
+    it("adds a milestone with no content yet", async () => {
+      await addMilestone();
       assert.equal(await escrow.getMilestoneCount(), 1n);
+
+      const milestone = await escrow.getMilestone(0);
+      assert.equal(milestone.contentId, "");
+      assert.equal(milestone.channelId, "");
     });
 
     it("reverts if tranche exceeds deposit", async () => {
       await assert.rejects(
-        escrow.addMilestone(
-          PLATFORM, METRIC_TYPE, THRESHOLD, USDC(200), await futureDeadline(), CONTENT_ID
-        ),
+        addMilestone({ tranche: USDC(200) }),
         /tranches exceed total deposit/
       );
     });
 
     it("reverts if deadline is in the past", async () => {
       const block = await ethers.provider.getBlock("latest");
-      const pastDeadline = block.timestamp - 100;
       await assert.rejects(
-        escrow.addMilestone(
-          PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, pastDeadline, CONTENT_ID
-        ),
+        escrow.addMilestone(PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, block.timestamp - 100),
         /invalid milestone parameters/
       );
+    });
+
+    // The oracle cannot measure these, so a milestone built on one could never
+    // pay out. They must be refused up front rather than fail at the deadline.
+    it("rejects a metric the oracle cannot measure on that platform", async () => {
+      const deadline = await futureDeadline();
+      const unsupported = [
+        [0, 1], // YOUTUBE CLICKS
+        [0, 3], // YOUTUBE WATCH_TIME
+        [1, 1], // TWITCH CLICKS
+        [2, 2], // LINKEDIN FOLLOWERS
+      ];
+      for (const [platform, metric] of unsupported) {
+        await assert.rejects(
+          escrow.addMilestone(platform, metric, THRESHOLD, USDC(1), deadline),
+          /metric not supported on platform/
+        );
+      }
+    });
+
+    it("accepts every metric the oracle supports", async () => {
+      const deadline = await futureDeadline();
+      const supported = [[0, 0], [0, 2], [1, 0], [1, 2], [1, 4], [2, 0], [2, 1]];
+      for (const [platform, metric] of supported) {
+        await escrow.addMilestone(platform, metric, THRESHOLD, USDC(1), deadline);
+      }
+      assert.equal(await escrow.getMilestoneCount(), BigInt(supported.length));
+    });
+  });
+
+  // ─────────────────────────────────────────────
+  // Proof Submission
+  // ─────────────────────────────────────────────
+  // The content to measure does not exist when the brand creates the campaign,
+  // so the creator names it — along with the channel it must belong to.
+
+  describe("Proof Submission", async () => {
+    beforeEach(async () => {
+      await deployFundedAndAssigned();
+      await addMilestone();
+    });
+
+    it("stores the creator's content, channel and proof", async () => {
+      await submitProof();
+      const milestone = await escrow.getMilestone(0);
+      assert.equal(milestone.contentId, CONTENT_ID);
+      assert.equal(milestone.channelId, CHANNEL_ID);
+      assert.equal(milestone.ipfsProofHash, IPFS_PROOF);
+    });
+
+    it("emits ProofSubmitted", async () => {
+      const tx = await escrow
+        .connect(creator)
+        .submitProof(0, CONTENT_ID, CHANNEL_ID, IPFS_PROOF);
+      const event = findEvent(await tx.wait(), "ProofSubmitted");
+      assert.ok(event, "ProofSubmitted not emitted");
+      assert.equal(event.args.contentId, CONTENT_ID);
+      assert.equal(event.args.channelId, CHANNEL_ID);
+    });
+
+    it("cannot be changed once submitted", async () => {
+      await submitProof();
+      await assert.rejects(
+        escrow.connect(creator).submitProof(0, "anotherVideo", CHANNEL_ID, IPFS_PROOF),
+        /proof already submitted/
+      );
+    });
+
+    it("reverts if non-creator submits proof", async () => {
+      await assert.rejects(
+        escrow.connect(other).submitProof(0, CONTENT_ID, CHANNEL_ID, IPFS_PROOF),
+        /caller is not creator/
+      );
+    });
+
+    it("reverts on an invalid milestone index", async () => {
+      await assert.rejects(
+        escrow.connect(creator).submitProof(5, CONTENT_ID, CHANNEL_ID, IPFS_PROOF),
+        /invalid milestone index/
+      );
+    });
+
+    it("reverts on an empty content ID", async () => {
+      await assert.rejects(
+        escrow.connect(creator).submitProof(0, "", CHANNEL_ID, IPFS_PROOF),
+        /content ID required/
+      );
+    });
+
+    it("reverts on an empty channel ID", async () => {
+      await assert.rejects(
+        escrow.connect(creator).submitProof(0, CONTENT_ID, "", IPFS_PROOF),
+        /channel ID required/
+      );
+    });
+
+    it("reverts on an empty proof hash", async () => {
+      await assert.rejects(
+        escrow.connect(creator).submitProof(0, CONTENT_ID, CHANNEL_ID, ""),
+        /proof hash required/
+      );
+    });
+
+    it("rejects proof submitted after the milestone deadline", async () => {
+      await advanceTime(86400 + 60);
+      await assert.rejects(submitProof(), /milestone deadline passed/);
     });
   });
 
@@ -253,68 +381,141 @@ describe("CampaignEscrow", async () => {
   describe("Milestone Met", async () => {
     beforeEach(async () => {
       await deployFundedAndAssigned();
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(), CONTENT_ID
-      );
+      await liveMilestone();
     });
 
-    it("releases tranche to creator when threshold is met", async () => {
+    it("credits the tranche to the creator without transferring it", async () => {
       const before = await usdc.balanceOf(creator.address);
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000);
-      const after = await usdc.balanceOf(creator.address);
-      assert.equal(after - before, TRANCHE);
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+
+      assert.equal(await escrow.withdrawable(creator.address), TRANCHE);
+      assert.equal(await usdc.balanceOf(creator.address), before);
+    });
+
+    it("lets the creator withdraw the credited tranche", async () => {
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+      await escrow.connect(creator).withdraw(creator.address);
+
+      assert.equal(await usdc.balanceOf(creator.address), TRANCHE);
+      assert.equal(await escrow.withdrawable(creator.address), 0n);
     });
 
     it("marks milestone status as MET", async () => {
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000);
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
       const milestone = await escrow.getMilestone(0);
       assert.equal(milestone.status, 1n); // 1 = MET
     });
 
+    // Regression: the event used to report the threshold, not what the oracle saw
+    it("reports the oracle's value in MilestoneMet, not the threshold", async () => {
+      const tx = await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+      const receipt = await tx.wait();
+
+      const log = receipt.logs
+        .map((l) => { try { return escrow.interface.parseLog(l); } catch { return null; } })
+        .find((e) => e && e.name === "MilestoneMet");
+      assert.ok(log, "MilestoneMet not emitted");
+      assert.equal(log.args.verifiedValue, 75_000n);
+      assert.equal(log.args.trancheReleased, TRANCHE);
+    });
+
     it("mints a reputation token to creator", async () => {
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000);
-      const score = await reputationToken.reputationScore(creator.address);
-      assert.equal(score, 1n);
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+      assert.equal(await reputationToken.reputationScore(creator.address), 1n);
+    });
+
+    it("records the payout value and brand in reputation", async () => {
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+      const [milestones, earned, uniqueBrands] =
+        await reputationToken.getReputation(creator.address);
+      assert.equal(milestones, 1n);
+      assert.equal(earned, TRANCHE);
+      assert.equal(uniqueBrands, 1n);
     });
 
     it("tracks totalReleased", async () => {
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000);
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
       assert.equal(await escrow.totalReleased(), TRANCHE);
     });
 
-    it("does not release if value is below threshold", async () => {
-      const before = await usdc.balanceOf(creator.address);
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 10_000);
-      const after = await usdc.balanceOf(creator.address);
-      assert.equal(after, before);
+    it("does not credit anything if value is below threshold", async () => {
+      await mockOracle.submitMetric(escrowAddress, 0, 10_000);
+      assert.equal(await escrow.withdrawable(creator.address), 0n);
+      assert.equal((await escrow.getMilestone(0)).status, 0n); // still PENDING
     });
 
     it("reverts if the same milestone is resolved twice", async () => {
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000);
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
       await assert.rejects(
-        mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000),
+        mockOracle.submitMetric(escrowAddress, 0, 75_000),
         /milestone already resolved/
       );
     });
   });
 
   // ─────────────────────────────────────────────
-  // Metric Without A Creator
+  // Metric Preconditions
   // ─────────────────────────────────────────────
 
-  describe("Metric Without A Creator", async () => {
-    beforeEach(async () => {
+  describe("Metric Preconditions", async () => {
+    it("rejects a verified metric while the campaign is still open", async () => {
       await deployFunded();
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(), CONTENT_ID
+      await addMilestone();
+      await assert.rejects(
+        mockOracle.submitMetric(escrowAddress, 0, 75_000),
+        /no creator assigned/
       );
     });
 
-    it("rejects a verified metric while the campaign is still open", async () => {
+    // A reading with no content behind it is not a measurement of anything
+    it("rejects a verified metric before the creator has named any content", async () => {
+      await deployFundedAndAssigned();
+      await addMilestone();
       await assert.rejects(
-        mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000),
-        /no creator assigned/
+        mockOracle.submitMetric(escrowAddress, 0, 75_000),
+        /no content submitted/
       );
+    });
+  });
+
+  // ─────────────────────────────────────────────
+  // Oracle Grace Period
+  // ─────────────────────────────────────────────
+  // An oracle that reports late must not cost the creator a target they hit.
+
+  describe("Oracle Grace Period", async () => {
+    beforeEach(async () => {
+      await deployFundedAndAssigned();
+      await liveMilestone({ deadlineIn: 60 });
+    });
+
+    it("still pays a met milestone reported after the deadline", async () => {
+      await advanceTime(120); // past the deadline, inside the grace window
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+
+      assert.equal((await escrow.getMilestone(0)).status, 1n); // MET
+      assert.equal(await escrow.withdrawable(creator.address), TRANCHE);
+    });
+
+    it("does not fail an unmet milestone during the grace window", async () => {
+      await advanceTime(120);
+      await mockOracle.submitMetric(escrowAddress, 0, 1_000);
+
+      assert.equal((await escrow.getMilestone(0)).status, 0n); // still PENDING
+      assert.equal(await escrow.withdrawable(brand.address), 0n);
+    });
+
+    it("blocks finalization during the grace window", async () => {
+      await advanceTime(120);
+      await assert.rejects(escrow.finalizeCampaign(), /milestone still live/);
+    });
+
+    it("fails an unmet milestone once the grace window closes", async () => {
+      await advanceTime(60 + GRACE_PERIOD + 60);
+      await mockOracle.submitMetric(escrowAddress, 0, 1_000);
+
+      assert.equal((await escrow.getMilestone(0)).status, 2n); // FAILED
+      assert.equal(await escrow.withdrawable(brand.address), TRANCHE);
     });
   });
 
@@ -323,82 +524,120 @@ describe("CampaignEscrow", async () => {
   // ─────────────────────────────────────────────
 
   describe("Milestone Failed", async () => {
-    beforeEach(() => deployFundedAndAssigned());
+    beforeEach(async () => {
+      await deployFundedAndAssigned();
+      await liveMilestone({ deadlineIn: 60 });
+      await advanceTime(60 + GRACE_PERIOD + 60);
+    });
 
-    it("refunds tranche to brand when deadline passed and threshold not met", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(60), CONTENT_ID
-      );
-
-      await advanceTime(100);
+    it("credits the tranche back to the brand", async () => {
+      await mockOracle.submitMetric(escrowAddress, 0, 1_000);
+      assert.equal(await escrow.withdrawable(brand.address), TRANCHE);
 
       const before = await usdc.balanceOf(brand.address);
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 1_000);
-      const after = await usdc.balanceOf(brand.address);
-      assert.equal(after - before, TRANCHE);
+      await escrow.connect(brand).withdraw(brand.address);
+      assert.equal((await usdc.balanceOf(brand.address)) - before, TRANCHE);
     });
 
     it("marks milestone status as FAILED", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(60), CONTENT_ID
-      );
-
-      await advanceTime(100);
-
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 1_000);
-      const milestone = await escrow.getMilestone(0);
-      assert.equal(milestone.status, 2n); // 2 = FAILED
+      await mockOracle.submitMetric(escrowAddress, 0, 1_000);
+      assert.equal((await escrow.getMilestone(0)).status, 2n);
     });
 
     it("does not mint reputation on a failed milestone", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(60), CONTENT_ID
-      );
-
-      await advanceTime(100);
-
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 1_000);
+      await mockOracle.submitMetric(escrowAddress, 0, 1_000);
       assert.equal(await reputationToken.reputationScore(creator.address), 0n);
     });
   });
 
   // ─────────────────────────────────────────────
-  // Proof Submission
+  // Withdrawals
   // ─────────────────────────────────────────────
 
-  describe("Proof Submission", async () => {
+  describe("Withdrawals", async () => {
     beforeEach(async () => {
       await deployFundedAndAssigned();
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(), CONTENT_ID
-      );
+      await liveMilestone();
     });
 
-    it("allows creator to submit proof", async () => {
-      await escrow.connect(creator).submitProof(0, IPFS_PROOF);
-      const milestone = await escrow.getMilestone(0);
-      assert.equal(milestone.ipfsProofHash, IPFS_PROOF);
+    it("sends to a different address when asked", async () => {
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+      await escrow.connect(creator).withdraw(other.address);
+      assert.equal(await usdc.balanceOf(other.address), TRANCHE);
     });
 
-    it("reverts if non-creator submits proof", async () => {
+    it("emits Withdrawn", async () => {
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+      const tx = await escrow.connect(creator).withdraw(creator.address);
+      const event = findEvent(await tx.wait(), "Withdrawn");
+      assert.ok(event, "Withdrawn not emitted");
+      assert.equal(event.args.account, creator.address);
+      assert.equal(event.args.amount, TRANCHE);
+    });
+
+    it("reverts with nothing to withdraw", async () => {
       await assert.rejects(
-        escrow.connect(other).submitProof(0, IPFS_PROOF),
-        /caller is not creator/
+        escrow.connect(other).withdraw(other.address),
+        /nothing to withdraw/
       );
     });
 
-    it("reverts on an invalid milestone index", async () => {
+    it("cannot be withdrawn twice", async () => {
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+      await escrow.connect(creator).withdraw(creator.address);
       await assert.rejects(
-        escrow.connect(creator).submitProof(5, IPFS_PROOF),
-        /invalid milestone index/
+        escrow.connect(creator).withdraw(creator.address),
+        /nothing to withdraw/
       );
     });
 
-    it("reverts on an empty proof hash", async () => {
+    it("reverts on a zero recipient", async () => {
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
       await assert.rejects(
-        escrow.connect(creator).submitProof(0, ""),
-        /proof hash required/
+        escrow.connect(creator).withdraw(ZERO_ADDRESS),
+        /invalid recipient/
       );
+    });
+  });
+
+  // ─────────────────────────────────────────────
+  // Blacklisted Accounts
+  // ─────────────────────────────────────────────
+  // USDC can blacklist an address. A direct transfer to one reverts, and that
+  // revert used to happen inside the oracle callback or finalizeCampaign —
+  // freezing the escrow for the other party too.
+
+  describe("Blacklisted Accounts", async () => {
+    beforeEach(async () => {
+      await deployFundedAndAssigned();
+      await liveMilestone();
+    });
+
+    it("still settles a met milestone when the creator is blacklisted", async () => {
+      await usdc.setBlacklisted(creator.address, true);
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+
+      assert.equal((await escrow.getMilestone(0)).status, 1n); // MET
+      assert.equal(await escrow.withdrawable(creator.address), TRANCHE);
+    });
+
+    it("lets a blacklisted creator recover funds to another address", async () => {
+      await usdc.setBlacklisted(creator.address, true);
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+
+      await escrow.connect(creator).withdraw(other.address);
+      assert.equal(await usdc.balanceOf(other.address), TRANCHE);
+    });
+
+    it("still finalizes, and pays the creator, when the brand is blacklisted", async () => {
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+      await usdc.setBlacklisted(brand.address, true);
+
+      await escrow.finalizeCampaign();
+      assert.equal(await escrow.isFinalized(), true);
+
+      await escrow.connect(creator).withdraw(creator.address);
+      assert.equal(await usdc.balanceOf(creator.address), TRANCHE);
     });
   });
 
@@ -447,33 +686,43 @@ describe("CampaignEscrow", async () => {
   describe("Campaign Finalization", async () => {
     beforeEach(() => deployFundedAndAssigned());
 
-    it("returns remainder to brand on finalization", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, USDC(60), await futureDeadline(60), CONTENT_ID
-      );
+    it("credits the failed tranche and remainder to the brand", async () => {
+      await liveMilestone({ tranche: USDC(60), deadlineIn: 60 });
+      await advanceTime(60 + GRACE_PERIOD + 60);
 
-      await advanceTime(100);
-
-      const before = await usdc.balanceOf(brand.address);
       await escrow.finalizeCampaign();
-      const after = await usdc.balanceOf(brand.address);
-      assert.equal(after - before, USDC(100));
+      assert.equal(await escrow.withdrawable(brand.address), USDC(100));
     });
 
-    it("reverts if non-brand tries to finalize", async () => {
-      await assert.rejects(
-        escrow.connect(other).finalizeCampaign(),
-        /not authorized to finalize/
-      );
+    // Finalizing moves no USDC out and only works once everything is settled,
+    // so anyone may call it — and the brand, not the caller, is credited.
+    it("can be called by anyone, crediting only the brand", async () => {
+      await liveMilestone({ tranche: USDC(60), deadlineIn: 60 });
+      await advanceTime(60 + GRACE_PERIOD + 60);
+
+      await escrow.connect(other).finalizeCampaign();
+      assert.equal(await escrow.isFinalized(), true);
+      assert.equal(await escrow.withdrawable(other.address), 0n);
+      assert.equal(await escrow.withdrawable(brand.address), USDC(100));
+    });
+
+    it("does not hand the brand USDC already owed to the creator", async () => {
+      await liveMilestone({ tranche: USDC(60) });
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+
+      // Creator has not withdrawn yet; finalize must leave their 60 alone
+      await escrow.finalizeCampaign();
+      assert.equal(await escrow.withdrawable(brand.address), USDC(40));
+      assert.equal(await escrow.withdrawable(creator.address), USDC(60));
+
+      await escrow.connect(creator).withdraw(creator.address);
+      await escrow.connect(brand).withdraw(brand.address);
+      assert.equal(await escrow.getBalance(), 0n);
     });
 
     it("reverts on double finalization", async () => {
-      await advanceTime(100);
       await escrow.finalizeCampaign();
-      await assert.rejects(
-        escrow.finalizeCampaign(),
-        /already finalized/
-      );
+      await assert.rejects(escrow.finalizeCampaign(), /already finalized/);
     });
   });
 
@@ -484,9 +733,7 @@ describe("CampaignEscrow", async () => {
   describe("Access Control", async () => {
     beforeEach(async () => {
       await deployFundedAndAssigned();
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(), CONTENT_ID
-      );
+      await liveMilestone();
     });
 
     it("reverts if non-oracle tries to submit metric", async () => {
@@ -499,7 +746,7 @@ describe("CampaignEscrow", async () => {
     it("reverts if a non-owner tries to add a milestone", async () => {
       await assert.rejects(
         escrow.connect(other).addMilestone(
-          PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(), CONTENT_ID
+          PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline()
         ),
         /OwnableUnauthorizedAccount/
       );
@@ -509,97 +756,65 @@ describe("CampaignEscrow", async () => {
   // ─────────────────────────────────────────────
   // Finalization Safety
   // ─────────────────────────────────────────────
-  // finalizeCampaign() sweeps the escrow's entire remaining balance to the
-  // brand. Doing that while a milestone is still live — pending, deadline not
-  // yet reached — lets the brand reclaim money the creator is still working to
-  // earn, including work already delivered but not yet verified by the oracle.
-  // Finalization must only settle campaigns that are genuinely over.
+  // finalizeCampaign() hands the brand everything not already owed. Doing that
+  // while a milestone is still live — before its deadline plus grace window —
+  // would let the brand reclaim money the creator is still working to earn,
+  // including work already delivered but not yet verified by the oracle.
 
   describe("Finalization Safety", async () => {
     beforeEach(() => deployFundedAndAssigned());
 
     it("reverts while a milestone is still live", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(86400), CONTENT_ID
-      );
-
-      await assert.rejects(
-        escrow.connect(brand).finalizeCampaign(),
-        /milestone still live/
-      );
+      await addMilestone();
+      await assert.rejects(escrow.finalizeCampaign(), /milestone still live/);
     });
 
     it("leaves the funds in escrow when finalization is refused", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(86400), CONTENT_ID
-      );
-
-      await assert.rejects(escrow.connect(brand).finalizeCampaign());
+      await addMilestone();
+      await assert.rejects(escrow.finalizeCampaign());
 
       assert.equal(await escrow.getBalance(), USDC(100));
       assert.equal(await escrow.isFinalized(), false);
     });
 
     it("cannot strand a creator who has met the threshold but not yet been verified", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(86400), CONTENT_ID
-      );
-      // Creator has delivered; the oracle simply has not reported yet.
-      await escrow.connect(creator).submitProof(0, IPFS_PROOF);
+      await liveMilestone();
 
-      await assert.rejects(
-        escrow.connect(brand).finalizeCampaign(),
-        /milestone still live/
-      );
+      await assert.rejects(escrow.finalizeCampaign(), /milestone still live/);
 
       // The tranche is still available, so the pending verification can pay out.
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000);
-      assert.equal(await usdc.balanceOf(creator.address), TRANCHE);
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
+      assert.equal(await escrow.withdrawable(creator.address), TRANCHE);
     });
 
     it("reverts when only some milestones have expired", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, USDC(50), await futureDeadline(60), CONTENT_ID
-      );
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, USDC(50), await futureDeadline(86400), CONTENT_ID
-      );
+      await addMilestone({ tranche: USDC(50), deadlineIn: 60 });
+      await addMilestone({ tranche: USDC(50), deadlineIn: 30 * 86400 });
 
-      await advanceTime(120); // only the first has expired
+      await advanceTime(60 + GRACE_PERIOD + 60); // only the first has expired
 
-      await assert.rejects(
-        escrow.connect(brand).finalizeCampaign(),
-        /milestone still live/
-      );
+      await assert.rejects(escrow.finalizeCampaign(), /milestone still live/);
     });
 
     it("finalizes once every milestone has expired", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, USDC(60), await futureDeadline(60), CONTENT_ID
-      );
+      await addMilestone({ tranche: USDC(60), deadlineIn: 60 });
+      await advanceTime(60 + GRACE_PERIOD + 60);
 
-      await advanceTime(120);
-
-      const before = await usdc.balanceOf(brand.address);
-      await escrow.connect(brand).finalizeCampaign();
-      const after = await usdc.balanceOf(brand.address);
-
-      assert.equal(after - before, USDC(100)); // failed tranche + remainder
+      await escrow.finalizeCampaign();
+      assert.equal(await escrow.withdrawable(brand.address), USDC(100)); // failed tranche + remainder
       assert.equal(await escrow.isFinalized(), true);
     });
 
     it("finalizes once every milestone is resolved", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(86400), CONTENT_ID
-      );
-      await mockOracle.submitMetric(await escrow.getAddress(), 0, 75_000);
+      await liveMilestone();
+      await mockOracle.submitMetric(escrowAddress, 0, 75_000);
 
-      await escrow.connect(brand).finalizeCampaign();
+      await escrow.finalizeCampaign();
       assert.equal(await escrow.isFinalized(), true);
     });
 
     it("finalizes a campaign that has no milestones", async () => {
-      await escrow.connect(brand).finalizeCampaign();
+      await escrow.finalizeCampaign();
       assert.equal(await escrow.isFinalized(), true);
     });
   });
@@ -620,11 +835,7 @@ describe("CampaignEscrow", async () => {
 
     it("emits CampaignFunded on deposit", async () => {
       const tx = await escrow.connect(brand).deposit(USDC(100));
-      const receipt = await tx.wait();
-
-      const event = receipt.logs.find(
-        (log) => log.fragment && log.fragment.name === "CampaignFunded"
-      );
+      const event = findEvent(await tx.wait(), "CampaignFunded");
       assert.ok(event, "CampaignFunded event not emitted");
       assert.equal(event.args.amount, USDC(100));
     });
@@ -636,37 +847,12 @@ describe("CampaignEscrow", async () => {
       // MAX_MILESTONES is 20 — the 21st must be rejected so the loops in
       // finalizeCampaign and the automation sweep stay bounded.
       for (let i = 0; i < 20; i++) {
-        await escrow.addMilestone(
-          PLATFORM, METRIC_TYPE, THRESHOLD, USDC(1), deadline, CONTENT_ID
-        );
+        await escrow.addMilestone(PLATFORM, METRIC_TYPE, THRESHOLD, USDC(1), deadline);
       }
 
       await assert.rejects(
-        escrow.addMilestone(
-          PLATFORM, METRIC_TYPE, THRESHOLD, USDC(1), deadline, CONTENT_ID
-        ),
+        escrow.addMilestone(PLATFORM, METRIC_TYPE, THRESHOLD, USDC(1), deadline),
         /too many milestones/
-      );
-    });
-  });
-
-  // ─────────────────────────────────────────────
-  // Proof Timing
-  // ─────────────────────────────────────────────
-
-  describe("Proof Timing", async () => {
-    beforeEach(() => deployFundedAndAssigned());
-
-    it("rejects proof submitted after the milestone deadline", async () => {
-      await escrow.addMilestone(
-        PLATFORM, METRIC_TYPE, THRESHOLD, TRANCHE, await futureDeadline(60), CONTENT_ID
-      );
-
-      await advanceTime(120);
-
-      await assert.rejects(
-        escrow.connect(creator).submitProof(0, IPFS_PROOF),
-        /milestone deadline passed/
       );
     });
   });

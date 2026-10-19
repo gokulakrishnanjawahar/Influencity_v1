@@ -4,7 +4,9 @@ pragma solidity ^0.8.24;
 import {FunctionsClient} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/FunctionsClient.sol";
 import {FunctionsRequest} from "@chainlink/contracts/src/v0.8/functions/v1_0_0/libraries/FunctionsRequest.sol";
 import {ConfirmedOwner} from "@chainlink/contracts/src/v0.8/shared/access/ConfirmedOwner.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import "../interfaces/ICampaignEscrow.sol";
+import "../libraries/MilestoneLib.sol";
 
 /// @title MetricsConsumer
 /// @notice Chainlink Functions client that receives verified metrics
@@ -155,21 +157,29 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
     ///                       escrow's behalf, so msg.sender is the handler and
     ///                       results would be delivered to the wrong contract.
     /// @param milestoneIndex Index of the milestone being verified
-    /// @param platform       0=YOUTUBE, 1=TWITCH, 2=LINKEDIN
-    /// @param contentId      Platform-specific content identifier (e.g. video ID, clip slug)
     /// @return requestId     Unique ID for tracking the request
+    /// @dev Everything the script needs — platform, metric, content, channel and
+    /// creator — is read from the escrow itself rather than taken from the
+    /// caller, so a caller cannot ask for a different metric or a different
+    /// video than the one the milestone is actually about.
     function requestMetric(
         address escrowAddress,
-        uint256 milestoneIndex,
-        uint8 platform,
-        string memory contentId
+        uint256 milestoneIndex
     ) external onlyAuthorisedCaller returns (bytes32 requestId) {
         require(
             authorisedEscrows[escrowAddress],
             "MetricsConsumer: escrow not authorised"
         );
-        require(platform <= 2, "MetricsConsumer: invalid platform");
-        require(bytes(contentId).length > 0, "MetricsConsumer: contentId required");
+
+        ICampaignEscrow escrow = ICampaignEscrow(escrowAddress);
+        MilestoneLib.Milestone memory m = escrow.getMilestone(milestoneIndex);
+        require(
+            m.status == MilestoneLib.MilestoneStatus.PENDING,
+            "MetricsConsumer: milestone not pending"
+        );
+        require(bytes(m.contentId).length > 0, "MetricsConsumer: no content submitted");
+
+        uint8 platform = uint8(m.platform);
 
         // Select source code based on platform
         string memory sourceCode = _getSourceCode(platform);
@@ -179,9 +189,13 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
         FunctionsRequest.Request memory req;
         req.initializeRequestForInlineJavaScript(sourceCode);
 
-        // Pass content ID as an argument to the JS script
-        string[] memory args = new string[](1);
-        args[0] = contentId;
+        // args[0] content to measure, args[1] which metric, args[2] the channel
+        // it must belong to, args[3] the wallet the channel must name
+        string[] memory args = new string[](4);
+        args[0] = m.contentId;
+        args[1] = MilestoneLib.metricTypeName(m.metricType);
+        args[2] = m.channelId;
+        args[3] = Strings.toHexString(escrow.creator());
         req.setArgs(args);
 
         // Send request to Chainlink network
@@ -200,7 +214,7 @@ contract MetricsConsumer is FunctionsClient, ConfirmedOwner {
             fulfilled: false
         });
 
-        emit MetricRequested(requestId, escrowAddress, milestoneIndex, platform, contentId);
+        emit MetricRequested(requestId, escrowAddress, milestoneIndex, platform, m.contentId);
     }
 
     // ─────────────────────────────────────────────

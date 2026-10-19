@@ -72,27 +72,31 @@ export async function getUserByWallet(walletAddress) {
 // ─────────────────────────────────────────────
 
 /// @notice Creates a campaign record in Supabase.
-/// Called after CampaignFactory.createCampaign() succeeds on-chain.
-/// @param {object} campaign - Campaign data from on-chain event + IPFS
-/// @returns {Promise<object>} - Created campaign record
+/// Called after CampaignFactory.createCampaign() succeeds on-chain — by
+/// POST /campaigns/confirm and by the indexer, whichever gets there first.
+/// Upserts on the escrow address so the second writer fills in rather than
+/// conflicts. Fields left undefined are not overwritten.
+/// @param {object} campaign - Campaign data from on-chain state + IPFS
+/// @returns {Promise<object>} - The campaign record
 
 export async function createCampaign(campaign) {
+  const record = {
+    campaign_id_onchain: campaign.campaignIdOnchain,
+    brand_address: campaign.brandAddress.toLowerCase(),
+    contract_address: campaign.contractAddress.toLowerCase(),
+    ipfs_brief_cid: campaign.ipfsBriefCid,
+    ipfs_brief_url: campaign.ipfsBriefUrl,
+    title: campaign.title,
+    description: campaign.description,
+    total_deposit_usdc: campaign.totalDepositUsdc,
+  };
+  for (const key of Object.keys(record)) {
+    if (record[key] === undefined) delete record[key];
+  }
+
   const { data, error } = await supabase
     .from("campaigns")
-    .insert({
-      campaign_id_onchain: campaign.campaignIdOnchain,
-      brand_address: campaign.brandAddress.toLowerCase(),
-      creator_address: campaign.creatorAddress
-        ? campaign.creatorAddress.toLowerCase()
-        : null,
-      contract_address: campaign.contractAddress?.toLowerCase(),
-      ipfs_brief_cid: campaign.ipfsBriefCid,
-      ipfs_brief_url: campaign.ipfsBriefUrl,
-      title: campaign.title,
-      description: campaign.description,
-      status: "open",
-      total_deposit_usdc: campaign.totalDepositUsdc,
-    })
+    .upsert(record, { onConflict: "contract_address" })
     .select()
     .single();
 
@@ -163,7 +167,8 @@ export async function updateCampaignStatus(contractAddress, status) {
 // Milestone Operations
 // ─────────────────────────────────────────────
 
-/// @notice Creates milestone records for a campaign
+/// @notice Creates milestone records for a campaign from on-chain milestones
+/// (see blockchain.readMilestones). Upserts, so re-running is harmless.
 export async function createMilestones(campaignId, milestones) {
   const records = milestones.map((m, i) => ({
     campaign_id: campaignId,
@@ -174,12 +179,14 @@ export async function createMilestones(campaignId, milestones) {
     tranche_usdc: m.trancheAmount,
     deadline: new Date(m.deadline * 1000).toISOString(),
     content_id: m.contentId,
-    status: "pending",
+    channel_id: m.channelId,
+    ipfs_proof_cid: m.ipfsProofHash,
+    status: m.status || "pending",
   }));
 
   const { data, error } = await supabase
     .from("milestones")
-    .insert(records)
+    .upsert(records, { onConflict: "campaign_id,milestone_index" })
     .select();
 
   if (error) throw new Error(`Failed to create milestones: ${error.message}`);
@@ -246,23 +253,27 @@ export async function createContentProof(proof) {
 // Reputation Event Operations
 // ─────────────────────────────────────────────
 
-/// @notice Records a reputation token mint event
+/// @notice Records a reputation token mint event. Keyed on (tx_hash, log_index)
+/// so the indexer seeing the same log twice records it once.
 export async function createReputationEvent(event) {
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from("reputation_events")
-    .insert({
-      creator_address: event.creatorAddress.toLowerCase(),
-      campaign_id: event.campaignId,
-      milestone_id: event.milestoneId,
-      token_id: event.tokenId,
-      minted_at: new Date().toISOString(),
-      tx_hash: event.txHash,
-    })
-    .select()
-    .single();
+    .upsert(
+      {
+        creator_address: event.creatorAddress.toLowerCase(),
+        campaign_id: event.campaignId,
+        milestone_id: event.milestoneId,
+        token_id: event.tokenId,
+        minted_at: event.mintedAt,
+        tx_hash: event.txHash,
+        log_index: event.logIndex,
+        brand_address: event.brandAddress?.toLowerCase(),
+        value_usdc: event.valueUsdc,
+      },
+      { onConflict: "tx_hash,log_index", ignoreDuplicates: true }
+    );
 
   if (error) throw new Error(`Failed to create reputation event: ${error.message}`);
-  return data;
 }
 
 /// @notice Gets all reputation events for a creator wallet
@@ -415,4 +426,95 @@ export async function cancelCampaignRecord(campaignId) {
     .single();
   if (error) throw new Error(`Failed to cancel campaign: ${error.message}`);
   return data;
+}
+// ─────────────────────────────────────────────
+// Indexer Writes
+// ─────────────────────────────────────────────
+// Applied from on-chain events. Each one sets state to what the chain says,
+// so applying the same event twice leaves the same result.
+
+/// @notice Updates campaign columns by escrow address
+export async function updateCampaignByContract(contractAddress, fields) {
+  const { error } = await supabase
+    .from("campaigns")
+    .update(fields)
+    .eq("contract_address", contractAddress.toLowerCase());
+
+  if (error) throw new Error(`Failed to update campaign: ${error.message}`);
+}
+
+/// @notice Updates milestone columns by campaign + index
+export async function updateMilestone(campaignId, milestoneIndex, fields) {
+  const { error } = await supabase
+    .from("milestones")
+    .update(fields)
+    .eq("campaign_id", campaignId)
+    .eq("milestone_index", milestoneIndex);
+
+  if (error) throw new Error(`Failed to update milestone: ${error.message}`);
+}
+
+/// @notice Escrow addresses of every campaign the database knows about
+export async function getAllEscrowAddresses() {
+  const { data, error } = await supabase
+    .from("campaigns")
+    .select("contract_address")
+    .not("contract_address", "is", null);
+
+  if (error) throw new Error(`Failed to list escrows: ${error.message}`);
+  return data.map((row) => row.contract_address);
+}
+
+/// @notice The indexer cursor: last block applied, or null if never synced
+export async function getSyncState(id) {
+  const { data, error } = await supabase
+    .from("sync_state")
+    .select("last_block, updated_at")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to read sync state: ${error.message}`);
+  return data;
+}
+
+/// @notice Moves the cursor forward. Never moves it backwards, so an older,
+/// slower sync finishing late cannot rewind a newer one.
+export async function advanceSyncState(id, lastBlock) {
+  const current = await getSyncState(id);
+  if (current && Number(current.last_block) >= lastBlock) return;
+
+  const { error } = await supabase
+    .from("sync_state")
+    .upsert({ id, last_block: lastBlock, updated_at: new Date().toISOString() });
+
+  if (error) throw new Error(`Failed to write sync state: ${error.message}`);
+}
+
+// ─────────────────────────────────────────────
+// SIWE Nonces
+// ─────────────────────────────────────────────
+
+/// @notice Stores a freshly issued sign-in nonce
+export async function createNonce(nonce, expiresAt) {
+  const { error } = await supabase
+    .from("auth_nonces")
+    .insert({ nonce, expires_at: expiresAt.toISOString() });
+
+  if (error) throw new Error(`Failed to store nonce: ${error.message}`);
+}
+
+/// @notice Atomically marks a nonce used. Returns false if it was never issued,
+/// has expired, or was already used — the conditional update matches no row.
+export async function consumeNonce(nonce) {
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("auth_nonces")
+    .update({ used_at: now })
+    .eq("nonce", nonce)
+    .is("used_at", null)
+    .gt("expires_at", now)
+    .select("nonce");
+
+  if (error) throw new Error(`Failed to consume nonce: ${error.message}`);
+  return data.length === 1;
 }

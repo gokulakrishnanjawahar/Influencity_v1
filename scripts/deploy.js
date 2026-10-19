@@ -32,6 +32,10 @@ async function main() {
     );
   }
 
+  // Every protocol event comes after this block, so the backend indexer can
+  // start its scan here instead of at genesis.
+  const indexerStartBlock = await ethers.provider.getBlockNumber();
+
   // ── 1. Deploy MockUSDC ──
   console.log("1. Deploying MockUSDC...");
   const MockUSDC = await ethers.getContractFactory("MockUSDC");
@@ -94,6 +98,7 @@ const mintTx = await mockUSDC.faucet(
     reputationToken: reputationTokenAddress,
     mockMetricsOracle: mockMetricsOracleAddress,
     campaignFactory: campaignFactoryAddress,
+    indexerStartBlock,
     deployedAt: new Date().toISOString(),
   };
 
@@ -113,6 +118,7 @@ const mintTx = await mockUSDC.faucet(
   console.log(`  REPUTATION_TOKEN_ADDRESS=${reputationTokenAddress}`);
   console.log(`  USDC_ADDRESS=${usdcAddress}`);
   console.log(`  MOCK_METRICS_ORACLE_ADDRESS=${mockMetricsOracleAddress}`);
+  console.log(`  INDEXER_START_BLOCK=${indexerStartBlock}`);
   console.log("\n  Add to client/.env.local:");
   console.log(`  VITE_CAMPAIGN_FACTORY_ADDRESS=${campaignFactoryAddress}`);
   console.log(`  VITE_REPUTATION_TOKEN_ADDRESS=${reputationTokenAddress}`);

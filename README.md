@@ -2,12 +2,12 @@
 
 **Influencer sponsorships that pay themselves out.**
 
-A brand locks USDC in escrow against measurable targets — 50,000 YouTube views, 10,000 Twitch concurrents. A creator delivers. A Chainlink oracle reads the real platform metric on-chain, and the contract releases the money the moment the number clears. Targets that expire unmet refund the brand automatically.
+A brand locks USDC in escrow against measurable targets — 50,000 YouTube views, 10,000 Twitch concurrents. A creator delivers. A Chainlink oracle reads the real platform metric on-chain — after checking the content really is on the creator's channel — and the contract credits the money to the creator the moment the number clears. Targets that expire unmet are credited back to the brand.
 
 **Nobody approves a payment. There is no "pending review" step to hide behind.**
 
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.24-363636?logo=solidity)](contracts/)
-[![Tests](https://img.shields.io/badge/tests-156%20passing-3fb950)](test/)
+[![Tests](https://img.shields.io/badge/tests-191%20passing-3fb950)](test/)
 [![Network](https://img.shields.io/badge/Polygon-Amoy-8247e5?logo=polygon)](https://amoy.polygonscan.com/)
 [![Chainlink](https://img.shields.io/badge/Chainlink-Functions%20%2B%20Automation-375bd2?logo=chainlink)](contracts/oracle/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -36,7 +36,7 @@ The usual escrow "fix" puts a human release button behind a wallet — the same 
 | | |
 |---|---|
 | **Brands** | Pay for outcomes, not promises. Capital is committed but recoverable — targets missed by the deadline refund automatically, with no invoice dispute and no agency in the middle. |
-| **Creators** | Terms that cannot be rewritten after delivery. A met threshold pays in the same transaction it's verified in, and every completed milestone becomes portable, unforgeable proof of performance. |
+| **Creators** | Terms that cannot be rewritten after delivery. A met threshold is credited in the same transaction it's verified in, ready to withdraw, and every completed milestone becomes portable, unforgeable proof of performance. |
 | **Agencies** | Programmatic campaigns across a roster, with settlement and reporting handled by the chain rather than a spreadsheet and a payments team. |
 
 ---
@@ -99,9 +99,9 @@ flowchart TB
 
     subgraph server["BACKEND — Express 5"]
         direction LR
-        API["Routes<br/>/campaigns /creators /webhooks"]
-        AUTH["SIWE middleware"]
-        SVC["Services<br/>ipfs · supabase · blockchain"]
+        API["Routes<br/>/auth /campaigns /creators /sync"]
+        AUTH["SIWE sessions"]
+        SVC["Services<br/>ipfs · supabase · blockchain · indexer"]
     end
 
     subgraph chain["POLYGON"]
@@ -178,16 +178,16 @@ flowchart TB
 
 ## Testing
 
-**156 passing, 0 failing.**
+**191 passing, 0 failing.**
 
 | Suite | Tests | Covers |
 |---|---|---|
-| `CampaignEscrow` | 50 | deposits, payouts, refunds, cancellation, finalization safety |
+| `CampaignEscrow` | 73 | deposits, creator-submitted content, payouts and withdrawals, oracle grace window, blacklisted accounts, cancellation, finalization safety |
 | `CampaignFactory` | 27 | creation, wiring, creator assignment, validation |
-| `ReputationToken` | 23 | soulbound enforcement, minting, metadata |
-| `AutomationHandler` | 22 | enrolment, sweeps, resilience, forwarder, manual override |
+| `ReputationToken` | 30 | soulbound enforcement, minting, collision-free token IDs, value- and brand-weighted reputation, metadata |
+| `AutomationHandler` | 23 | enrolment, sweeps, resilience, forwarder, manual override |
 | `OracleFlow` | 14 | a full campaign through the mock oracle |
-| `MetricsConsumer` | 13 | request routing, callback resilience |
+| `MetricsConsumer` | 17 | request routing, metric/channel/creator arguments, callback resilience |
 | `OracleWiring` | 7 | the production wiring end to end against a mock DON router |
 
 The oracle layer is tested against purpose-built mocks rather than assumed correct. `MockFunctionsRouter` stands in for the Chainlink router so the fulfillment callback is exercised without a live DON, and `MockMetricsConsumer` can be told to revert on demand — which is how "one failing request must not abort the sweep" is *proven* rather than asserted.
@@ -246,7 +246,7 @@ Copy `.env.example` → `.env` and `client/.env.example` → `client/.env.local`
 ```
 contracts/          core · oracle · libraries · interfaces · mocks
 scripts/            deploy · deployOracle · verify · exportAbis · seedTestData
-test/               7 suites, 156 tests
+test/               7 suites, 191 tests
 server/src/         routes · services · middleware · chainlink-functions
 client/src/         pages · components · hooks · config
 supabase/migrations/
