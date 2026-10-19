@@ -15,23 +15,15 @@ holes (list below). **The contracts on Amoy are now the OLD version** — the
 client and server expect the new ABIs, so nothing works end to end until
 the contracts are redeployed. Tests: 191 passing (was 156).
 
-## 1. Get ~0.16 POL more, then redeploy
+## 1–2. Redeploy — DONE 2026-10-19
 
-The deployer `0xc4B0…DCc5` holds **0.026 POL**; the new deploy measures
-**7.35M gas ≈ 0.184 POL at 25 gwei**. Top up from the Amoy faucet, then:
-
-```bash
-AMOY_GAS_PRICE_GWEI=25 npx hardhat run scripts/deploy.js --network polygonAmoy
-```
-
-The script now also prints `INDEXER_START_BLOCK` (saved to deployments.json).
-
-## 2. Paste the new values
-
-- root `.env` → the four addresses + `INDEXER_START_BLOCK`
-  (`SESSION_SECRET` and `CHAIN_ID` were already added locally)
-- `client/.env.local` → the three `VITE_` addresses
-- README "Deployed contracts" table → new addresses
+Deployed at 28 gwei (base fee was ~0; a brief ~30 gwei spike earlier that
+day made deploys unaffordable — check base fee before deploying). Reused the
+unchanged MockUSDC and MockMetricsOracle via REUSE_USDC_ADDRESS /
+REUSE_ORACLE_ADDRESS. New: CampaignFactory 0x05CebF15c3CDC9563AC6c40B6141db2dA177Df3B,
+ReputationToken 0x93d4f122681e455F9cc24A27aEcaA2130a25F896,
+INDEXER_START_BLOCK 50610714. Root .env, client/.env.local, README and
+deployments.json updated. Deployer left with ~0.051 POL.
 
 ## 3. Run the Supabase migration
 

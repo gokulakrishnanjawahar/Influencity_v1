@@ -36,11 +36,27 @@ async function main() {
   // start its scan here instead of at genesis.
   const indexerStartBlock = await ethers.provider.getBlockNumber();
 
+  // Optionally reuse already-deployed mocks. MockUSDC and MockMetricsOracle
+  // rarely change, and redeploying them costs ~1.2M gas for nothing:
+  //   REUSE_USDC_ADDRESS=0x...  REUSE_ORACLE_ADDRESS=0x...
+  async function existing(name, address) {
+    if (!address) return null;
+    if ((await ethers.provider.getCode(address)) === "0x") {
+      throw new Error(`${name} at ${address} has no code on this network`);
+    }
+    return ethers.getContractAt(name, address);
+  }
+
   // ── 1. Deploy MockUSDC ──
-  console.log("1. Deploying MockUSDC...");
-  const MockUSDC = await ethers.getContractFactory("MockUSDC");
-  const mockUSDC = await MockUSDC.deploy();
-  await mockUSDC.waitForDeployment();
+  let mockUSDC = await existing("MockUSDC", process.env.REUSE_USDC_ADDRESS);
+  if (mockUSDC) {
+    console.log("1. Reusing MockUSDC");
+  } else {
+    console.log("1. Deploying MockUSDC...");
+    const MockUSDC = await ethers.getContractFactory("MockUSDC");
+    mockUSDC = await MockUSDC.deploy();
+    await mockUSDC.waitForDeployment();
+  }
   const usdcAddress = await mockUSDC.getAddress();
   console.log(`   ✓ MockUSDC → ${usdcAddress}\n`);
 
@@ -53,10 +69,15 @@ async function main() {
   console.log(`   ✓ ReputationToken → ${reputationTokenAddress}\n`);
 
   // ── 3. Deploy MockMetricsOracle ──
-  console.log("3. Deploying MockMetricsOracle...");
-  const MockMetricsOracle = await ethers.getContractFactory("MockMetricsOracle");
-  const mockMetricsOracle = await MockMetricsOracle.deploy();
-  await mockMetricsOracle.waitForDeployment();
+  let mockMetricsOracle = await existing("MockMetricsOracle", process.env.REUSE_ORACLE_ADDRESS);
+  if (mockMetricsOracle) {
+    console.log("3. Reusing MockMetricsOracle");
+  } else {
+    console.log("3. Deploying MockMetricsOracle...");
+    const MockMetricsOracle = await ethers.getContractFactory("MockMetricsOracle");
+    mockMetricsOracle = await MockMetricsOracle.deploy();
+    await mockMetricsOracle.waitForDeployment();
+  }
   const mockMetricsOracleAddress = await mockMetricsOracle.getAddress();
   console.log(`   ✓ MockMetricsOracle → ${mockMetricsOracleAddress}\n`);
 
@@ -83,12 +104,12 @@ async function main() {
   console.log("   ✓ Registered\n");
 
   // ── 6. Mint test USDC to deployer ──
-  console.log("6. Minting 10,000 test USDC to deployer...");
-const mintTx = await mockUSDC.faucet(
-    ethers.parseUnits("10000", 6)
-  );
-  await mintTx.wait();
-  console.log("   ✓ Minted 10,000 USDC\n");
+  if (!process.env.REUSE_USDC_ADDRESS) {
+    console.log("6. Minting 10,000 test USDC to deployer...");
+    const mintTx = await mockUSDC.faucet(ethers.parseUnits("10000", 6));
+    await mintTx.wait();
+    console.log("   ✓ Minted 10,000 USDC\n");
+  }
 
   // ── Save addresses ──
   const addresses = {

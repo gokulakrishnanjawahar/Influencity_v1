@@ -18,8 +18,8 @@ A brand locks USDC in escrow against measurable targets — 50,000 YouTube views
 
 | Contract | Address |
 |---|---|
-| CampaignFactory | [`0x42e0fe1AFFd173108BbDC921D5bFCf1527536Cd0`](https://amoy.polygonscan.com/address/0x42e0fe1AFFd173108BbDC921D5bFCf1527536Cd0) |
-| ReputationToken | [`0x3a87F8737CfE6287236bd2Df41F48f3F71A21bD8`](https://amoy.polygonscan.com/address/0x3a87F8737CfE6287236bd2Df41F48f3F71A21bD8) |
+| CampaignFactory | [`0x05CebF15c3CDC9563AC6c40B6141db2dA177Df3B`](https://amoy.polygonscan.com/address/0x05CebF15c3CDC9563AC6c40B6141db2dA177Df3B) |
+| ReputationToken | [`0x93d4f122681e455F9cc24A27aEcaA2130a25F896`](https://amoy.polygonscan.com/address/0x93d4f122681e455F9cc24A27aEcaA2130a25F896) |
 | MockUSDC | [`0x68C6767ab108690DFab9eff93E5683E4F4EC3BEB`](https://amoy.polygonscan.com/address/0x68C6767ab108690DFab9eff93E5683E4F4EC3BEB) |
 | MockMetricsOracle | [`0x13F29d51B05AF0d3A3cAB2c6Cf6e949A3cc23E15`](https://amoy.polygonscan.com/address/0x13F29d51B05AF0d3A3cAB2c6Cf6e949A3cc23E15) |
 
