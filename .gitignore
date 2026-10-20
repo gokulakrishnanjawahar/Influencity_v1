@@ -8,3 +8,6 @@ typechain-types/
 
 # Env files prepared for pasting into Vercel — contain secrets
 .env.vercel
+.vercel
+.env*
+supabase/.temp/
