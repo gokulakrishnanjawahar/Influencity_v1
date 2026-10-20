@@ -25,19 +25,23 @@ ReputationToken 0x93d4f122681e455F9cc24A27aEcaA2130a25F896,
 INDEXER_START_BLOCK 50610714. Root .env, client/.env.local, README and
 deployments.json updated. Deployer left with ~0.051 POL.
 
-## 3. Run the Supabase migration
+## 3–4. Database + Vercel — DONE 2026-10-20
 
-`supabase/migrations/003_auth_and_indexer.sql` in the SQL editor — adds
-`auth_nonces`, `sync_state`, `milestones.channel_id`, reputation dedupe keys.
-
-## 4. Vercel server env (when deploying)
-
-Set: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `PINATA_JWT`, `PINATA_GATEWAY`,
-`RPC_URL`, `CAMPAIGN_FACTORY_ADDRESS`, `REPUTATION_TOKEN_ADDRESS`,
-`INDEXER_START_BLOCK`, `SESSION_SECRET` (new random value), `CHAIN_ID=80002`,
-`CLIENT_URL` (the frontend URL — SIWE only accepts that host).
-**Do not set `PRIVATE_KEY`** — the server no longer signs anything.
-`WEBHOOK_SECRET` is gone with the webhook route.
+- Migrations 003 and 004 run. 004 locked writes: the old SUPABASE_SERVICE_KEY
+  was actually the anon key and anon could write campaigns/milestones/users.
+  Now anon writes are blocked; server uses the sb_secret_ key.
+- LIVE: frontend https://influencity-v1.vercel.app (project influencity-v1,
+  Git-connected, root dir client — pushes to main redeploy it).
+  Backend https://influencity-api.vercel.app (project influencity-api,
+  deployed by CLI from server/ — NOT Git-connected: redeploy with
+  `cd server && vercel deploy --prod`).
+- Vercel CLI fails on the home/college network (TLS intercepted, self-signed
+  cert); works on phone hotspot.
+- Stale secrets (PRIVATE_KEY etc.) removed from influencity-v1. Duplicate
+  projects influencity_v1, influencity-v1-yg77, influencity-v1-88f7,
+  influencity-67wr still exist and may still hold PRIVATE_KEY — delete them.
+- Still to run: delete the two seed campaigns (0xaaaa…, 0xbbbb…) and the 3
+  seed reputation_events — they hold campaign IDs 1 and 2.
 
 ## 5. Smoke test (changed flow)
 
