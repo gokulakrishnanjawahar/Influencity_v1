@@ -37,11 +37,48 @@ deployments.json updated. Deployer left with ~0.051 POL.
   `cd server && vercel deploy --prod`).
 - Vercel CLI fails on the home/college network (TLS intercepted, self-signed
   cert); works on phone hotspot.
-- Stale secrets (PRIVATE_KEY etc.) removed from influencity-v1. Duplicate
-  projects influencity_v1, influencity-v1-yg77, influencity-v1-88f7,
-  influencity-67wr still exist and may still hold PRIVATE_KEY — delete them.
-- Still to run: delete the two seed campaigns (0xaaaa…, 0xbbbb…) and the 3
-  seed reputation_events — they hold campaign IDs 1 and 2.
+- Stale secrets (PRIVATE_KEY etc.) removed from influencity-v1. Checked
+  2026-10-22 via the Vercel API: **no Influencity project holds PRIVATE_KEY
+  any more.** Duplicates influencity_v1, influencity-v1-yg77 and
+  influencity-v1-88f7 are still Git-connected to this repo, so every push to
+  main builds four times. Delete them only once the user confirms none of
+  their URLs were shared.
+- **Still to run (blocks the first real campaign):** the two seed campaigns
+  (0xaaaa…, 0xbbbb…, brand 0x1111…, creator 0x2222…) still hold
+  `campaign_id_onchain` 1 and 2. That column is unique, so the indexer fails
+  to insert the first campaign created on the new factory. The SQL is in the
+  2026-10-22 block below; it needs the user's go-ahead (production delete).
+
+## 2026-10-22 — verification + cleanup
+
+- Verified on **Sourcify**: MockUSDC, MockMetricsOracle, ReputationToken,
+  CampaignFactory. **Not on PolygonScan:** `ETHERSCAN_API_KEY` in `.env` is a
+  placeholder. Get a free key at etherscan.io, then run
+  `npx hardhat verify etherscan --network polygonAmoy <addr> [args]`.
+  Constructor args: ReputationToken `"https://gateway.pinata.cloud/ipfs/"`;
+  CampaignFactory `<usdc> <reputationToken> <mockMetricsOracle>`.
+- `hardhat.config.js`: the API key moved from `etherscan` to
+  `verify.etherscan`. Hardhat 3 ignores the old key silently.
+  `scripts/verify.js` is an empty file.
+- Backend needed no redeploy: last deploy is newer than the last server/ change.
+  `/sync` was caught up at block 50835717.
+- Seed cleanup SQL (run in the Supabase SQL editor):
+
+  ```sql
+  begin;
+  delete from reputation_events
+   where campaign_id in (select id from campaigns where contract_address in
+           ('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'))
+      or creator_id in (select id from users where wallet_address in
+           ('0x1111111111111111111111111111111111111111','0x2222222222222222222222222222222222222222'));
+  delete from campaigns where contract_address in
+    ('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+  delete from users where wallet_address in
+    ('0x1111111111111111111111111111111111111111','0x2222222222222222222222222222222222222222');
+  commit;
+  ```
+
+  Milestones, content_proofs and applications cascade with the campaign.
 
 ## 5. Smoke test (changed flow)
 

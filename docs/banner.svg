@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-label="Influencity — influencer sponsorships that pay themselves out">
+  <defs>
+    <clipPath id="frame">
+      <rect width="1280" height="400" rx="20"/>
+    </clipPath>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#ffffff" fill-opacity="0.06"/>
+    </pattern>
+    <radialGradient id="glow" cx="990" cy="200" r="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8247e5" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#8247e5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0a0a0a" stop-opacity="1"/>
+      <stop offset="0.55" stop-color="#0a0a0a" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#0a0a0a" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <g clip-path="url(#frame)">
+    <rect width="1280" height="400" fill="#0a0a0a"/>
+    <rect width="1280" height="400" fill="url(#dots)"/>
+    <rect width="1280" height="400" fill="url(#glow)"/>
+    <rect width="700" height="400" fill="url(#fade)"/>
+  </g>
+  <rect x="0.5" y="0.5" width="1279" height="399" rx="19.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+
+  <!-- mark + wordmark -->
+  <g transform="translate(72 98) scale(1.78)" fill="none" stroke="#ffffff" stroke-linecap="round">
+    <polygon points="18,3 31,10.5 31,25.5 18,33 5,25.5 5,10.5" stroke-width="1.5"/>
+    <polygon points="18,10 25,14.5 25,21.5 18,26 11,21.5 11,14.5" fill="#ffffff" fill-opacity="0.08" stroke-width="0.75"/>
+    <circle cx="18" cy="18" r="3.5" fill="#ffffff" stroke="none"/>
+    <line x1="18" y1="3" x2="18" y2="7" stroke-width="1.5"/>
+    <line x1="31" y1="10.5" x2="27.6" y2="12.5" stroke-width="1.5"/>
+    <line x1="31" y1="25.5" x2="27.6" y2="23.5" stroke-width="1.5"/>
+  </g>
+  <text x="152" y="151" fill="#ffffff" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="56" font-weight="600" letter-spacing="-1.5">Influencity</text>
+
+  <text x="72" y="224" fill="#ededed" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="27" font-weight="500" letter-spacing="-0.4">Influencer sponsorships that pay themselves out.</text>
+  <text x="72" y="258" fill="#8a8a8a" font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" font-size="18">USDC in escrow, released by oracle-verified milestones.</text>
+
+  <!-- chips -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#bdbdbd" text-anchor="middle">
+    <rect x="72" y="296" width="124" height="30" rx="15" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.14"/>
+    <text x="134" y="315.5">USDC escrow</text>
+    <rect x="206" y="296" width="164" height="30" rx="15" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.14"/>
+    <text x="288" y="315.5">Chainlink oracle</text>
+    <rect x="380" y="296" width="122" height="30" rx="15" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.14"/>
+    <text x="441" y="315.5">Soulbound</text>
+    <rect x="512" y="296" width="96" height="30" rx="15" fill="#8247e5" fill-opacity="0.16" stroke="#8247e5" stroke-opacity="0.55"/>
+    <text x="560" y="315.5" fill="#c9b3f5">Polygon</text>
+  </g>
+
+  <!-- milestone card -->
+  <rect x="744" y="72" width="464" height="256" rx="16" fill="#111111" fill-opacity="0.92" stroke="#ffffff" stroke-opacity="0.1"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+    <text x="776" y="110" fill="#6b6b6b" font-size="12" letter-spacing="1.2">CAMPAIGN ESCROW · 1,000 USDC</text>
+    <circle cx="1170" cy="106" r="4" fill="#3fb950"/>
+    <text x="1158" y="110" fill="#6b6b6b" font-size="12" text-anchor="end" letter-spacing="1.2">LIVE</text>
+  </g>
+  <line x1="776" y1="126" x2="1176" y2="126" stroke="#ffffff" stroke-opacity="0.07"/>
+
+  <line x1="788" y1="160" x2="788" y2="276" stroke="#ffffff" stroke-opacity="0.16" stroke-width="2"/>
+
+  <g font-family="ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
+    <circle cx="788" cy="160" r="7" fill="#ffffff"/>
+    <text x="812" y="158" fill="#f5f5f5" font-size="16" font-weight="500">50,000 YouTube views</text>
+    <text x="812" y="178" fill="#7a7a7a" font-size="12.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">met · 61,204 verified</text>
+    <text x="1176" y="165" fill="#ffffff" font-size="15" font-weight="600" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">+500 USDC</text>
+
+    <circle cx="788" cy="218" r="7" fill="#ffffff"/>
+    <text x="812" y="216" fill="#f5f5f5" font-size="16" font-weight="500">10,000 Twitch concurrents</text>
+    <text x="812" y="236" fill="#7a7a7a" font-size="12.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">met · badge minted</text>
+    <text x="1176" y="223" fill="#ffffff" font-size="15" font-weight="600" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">+300 USDC</text>
+
+    <circle cx="788" cy="276" r="6" fill="#111111" stroke="#7a7a7a" stroke-width="2"/>
+    <text x="812" y="274" fill="#a8a8a8" font-size="16" font-weight="500">2,000 LinkedIn clicks</text>
+    <text x="812" y="294" fill="#6b6b6b" font-size="12.5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">missed · deadline + 2 days</text>
+    <text x="1176" y="281" fill="#8a8a8a" font-size="15" font-weight="600" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">200 → brand</text>
+  </g>
+</svg>

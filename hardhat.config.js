@@ -62,9 +62,12 @@ export default {
   },
 
   // hardhat-verify v3 has built-in support for polygon and polygonAmoy via the
-  // Etherscan V2 API, so no customChains block is needed.
-  etherscan: {
-    apiKey: ETHERSCAN_API_KEY,
+  // Etherscan V2 API, so no customChains block is needed. Hardhat 3 reads the
+  // key from verify.etherscan; a top-level `etherscan` block is silently ignored.
+  verify: {
+    etherscan: {
+      apiKey: ETHERSCAN_API_KEY,
+    },
   },
 
   paths: {
