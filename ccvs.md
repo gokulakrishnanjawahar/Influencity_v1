@@ -51,10 +51,14 @@ deployments.json updated. Deployer left with ~0.051 POL.
 
 ## 2026-10-22 — verification + cleanup
 
-- Verified on **Sourcify**: MockUSDC, MockMetricsOracle, ReputationToken,
-  CampaignFactory. **Not on PolygonScan:** `ETHERSCAN_API_KEY` in `.env` is a
-  placeholder. Get a free key at etherscan.io, then run
+- Verified on **Sourcify and PolygonScan** (CampaignFactory is an Exact Match):
+  MockUSDC, MockMetricsOracle, ReputationToken, CampaignFactory. A real
+  `ETHERSCAN_API_KEY` is now in `.env`. For future deploys:
   `npx hardhat verify etherscan --network polygonAmoy <addr> [args]`.
+- User confirmed the duplicate Vercel URLs were never shared. Deleting them
+  was blocked by the permission classifier, so the user is deleting
+  influencity_v1, influencity-v1-yg77 and influencity-v1-88f7 by hand.
+- Favicon: square background removed; the hexagon itself is filled #080808.
   Constructor args: ReputationToken `"https://gateway.pinata.cloud/ipfs/"`;
   CampaignFactory `<usdc> <reputationToken> <mockMetricsOracle>`.
 - `hardhat.config.js`: the API key moved from `etherscan` to
